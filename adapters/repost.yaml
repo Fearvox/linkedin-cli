@@ -1,0 +1,111 @@
+site: linkedin
+name: repost
+description: Repost/share a LinkedIn post with optional commentary
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  url:
+    positional: true
+    type: string
+    required: true
+    description: "Original post URL to repost"
+  text:
+    type: string
+    default: ""
+    description: "Optional commentary text"
+  dry-run:
+    type: bool
+    default: false
+    description: "Preview without reposting"
+
+columns: [status, original_url, repost_url, has_commentary]
+
+pipeline:
+  - navigate: ${{ args.url }}
+  - wait: 3
+  - evaluate: |
+      (async () => {
+        const originalUrl = ${{ args.url | json }};
+        const commentary = ${{ args.text | json }};
+        const dryRun = ${{ args['dry-run'] | json }};
+
+        let shareUrn = '';
+        const activityMatch = originalUrl.match(/urn:li:activity:(\d+)/);
+        if (activityMatch) {
+          shareUrn = 'urn:li:activity:' + activityMatch[1];
+        } else {
+          const allEls = document.querySelectorAll('*');
+          for (const el of allEls) {
+            for (const attr of el.attributes) {
+              const m = attr.value.match(/urn:li:(?:activity|share):(\d+)/);
+              if (m) { shareUrn = m[0]; break; }
+            }
+            if (shareUrn) break;
+          }
+        }
+        if (!shareUrn) throw new Error('Could not find share/activity URN.');
+
+        if (dryRun) {
+          return [{
+            status: 'DRY_RUN', original_url: originalUrl,
+            repost_url: '', has_commentary: commentary ? 'yes' : 'no'
+          }];
+        }
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        const me = await fetch('/voyager/api/me', {
+          credentials: 'include',
+          headers: { 'csrf-token': csrf }
+        }).then(r => r.json());
+        const personId = me.miniProfile?.entityUrn?.split(':').pop() || me.plainId;
+
+        const payload = {
+          author: 'urn:li:person:' + personId,
+          lifecycleState: 'PUBLISHED',
+          specificContent: {
+            'com.linkedin.ugc.ShareContent': {
+              shareCommentary: { text: commentary },
+              shareMediaCategory: 'NONE'
+            }
+          },
+          visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' },
+          originalShare: shareUrn,
+        };
+
+        const res = await fetch('/voyager/api/contentcreation/normalizedShares', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'csrf-token': csrf,
+            'x-restli-protocol-version': '2.0.0',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error('Repost failed: HTTP ' + res.status + ' — ' + err.slice(0, 200));
+        }
+
+        const result = await res.json();
+        const newUrn = result?.urn || result?.value?.urn || '';
+        const newId = newUrn.split(':').pop() || '';
+        const repostUrl = newId ? 'https://www.linkedin.com/feed/update/urn:li:share:' + newId + '/' : '';
+
+        return [{
+          status: 'REPOSTED', original_url: originalUrl,
+          repost_url: repostUrl, has_commentary: commentary ? 'yes' : 'no'
+        }];
+      })()
+  - map:
+      status: ${{ item.status }}
+      original_url: ${{ item.original_url }}
+      repost_url: ${{ item.repost_url }}
+      has_commentary: ${{ item.has_commentary }}
