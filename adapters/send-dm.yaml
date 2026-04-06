@@ -1,0 +1,143 @@
+site: linkedin
+name: send-dm
+description: Send a direct message to a LinkedIn connection
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  profile:
+    positional: true
+    type: string
+    required: true
+    description: "Recipient profile URL or vanity name"
+  text:
+    type: string
+    required: true
+    description: "Message text"
+  dry-run:
+    type: bool
+    default: false
+    description: "Preview without sending"
+
+columns: [status, recipient, message_preview]
+
+pipeline:
+  - navigate: "https://www.linkedin.com/feed/"
+  - wait: 2
+  - evaluate: |
+      (async () => {
+        const profileInput = ${{ args.profile | json }};
+        const messageText = ${{ args.text | json }};
+        const dryRun = ${{ args['dry-run'] | json }};
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        let profileUrl = profileInput;
+        if (!profileUrl.startsWith('http')) {
+          profileUrl = 'https://www.linkedin.com/in/' + profileUrl.replace(/^\/in\//, '');
+        }
+        const vanity = profileUrl.match(/\/in\/([^/?]+)/)?.[1];
+        if (!vanity) throw new Error('Cannot parse profile URL: ' + profileInput);
+
+        // Try multiple Voyager endpoints — LinkedIn progressively restricts them
+        let recipientUrn, displayName;
+        const endpoints = [
+          '/voyager/api/identity/profiles/' + vanity,
+          '/voyager/api/identity/dash/profiles?q=memberIdentity&memberIdentity=' + vanity,
+        ];
+        let lastError = '';
+        for (const ep of endpoints) {
+          try {
+            const profileRes = await fetch(ep, {
+              credentials: 'include',
+              headers: { 'csrf-token': csrf, 'x-restli-protocol-version': '2.0.0' }
+            });
+            if (!profileRes.ok) {
+              lastError = 'HTTP ' + profileRes.status + ' from ' + ep;
+              continue;
+            }
+            const profileData = await profileRes.json();
+            // dash/profiles returns { elements: [...] }
+            const profile = profileData.elements?.[0] || profileData;
+            recipientUrn = profile.entityUrn || profile.objectUrn || profile.miniProfile?.entityUrn;
+            const fn = profile.firstName?.localized?.en_US || profile.firstName || '';
+            const ln = profile.lastName?.localized?.en_US || profile.lastName || '';
+            displayName = [fn, ln].filter(Boolean).join(' ') || vanity;
+            if (recipientUrn) break;
+          } catch (e) {
+            lastError = e.message;
+          }
+        }
+        if (!recipientUrn) {
+          // Fallback: navigate to profile page and extract URN from page data
+          const profilePageRes = await fetch('https://www.linkedin.com/in/' + vanity, {
+            credentials: 'include',
+            headers: { 'accept': 'text/html' }
+          });
+          if (profilePageRes.ok) {
+            const html = await profilePageRes.text();
+            const urnMatch = html.match(/urn:li:(?:fs_miniProfile|fsd_profile|member):([A-Za-z0-9_-]+)/);
+            if (urnMatch) {
+              recipientUrn = urnMatch[0];
+              const nameMatch = html.match(/<title>([^<|]+)/);
+              displayName = nameMatch ? nameMatch[1].trim() : vanity;
+            }
+          }
+        }
+        if (!recipientUrn) throw new Error('Could not resolve recipient URN for ' + vanity + '. Last error: ' + lastError);
+
+        const recipientId = recipientUrn.split(':').pop();
+
+        if (dryRun) {
+          return [{
+            status: 'DRY_RUN',
+            recipient: displayName + ' (' + vanity + ')',
+            message_preview: messageText.slice(0, 200)
+          }];
+        }
+
+        const res = await fetch('/voyager/api/messaging/conversations', {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'csrf-token': csrf,
+            'x-restli-protocol-version': '2.0.0',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            recipients: [recipientUrn],
+            body: messageText,
+            conversationCreate: {
+              eventCreate: {
+                value: {
+                  'com.linkedin.voyager.messaging.create.MessageCreate': {
+                    body: messageText,
+                    attachments: [],
+                  }
+                }
+              },
+              recipients: [recipientUrn],
+              subtype: 'MEMBER_TO_MEMBER',
+            }
+          }),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error('DM failed: HTTP ' + res.status + ' — ' + err.slice(0, 200));
+        }
+
+        return [{
+          status: 'SENT',
+          recipient: displayName + ' (' + vanity + ')',
+          message_preview: messageText.slice(0, 200)
+        }];
+      })()
+  - map:
+      status: ${{ item.status }}
+      recipient: ${{ item.recipient }}
+      message_preview: ${{ item.message_preview }}
