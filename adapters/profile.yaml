@@ -1,0 +1,50 @@
+site: linkedin
+name: profile
+description: View a LinkedIn member's public profile
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  url:
+    positional: true
+    type: string
+    required: true
+    description: "LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)"
+
+columns: [name, headline, location, connections, about, experience, education, profile_url]
+
+pipeline:
+  - navigate: ${{ args.url }}
+  - wait: 3
+  - evaluate: |
+      (() => {
+        const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+        const textOf = (sel) => { const el = document.querySelector(sel); return el ? normalize(el.textContent) : ''; };
+
+        const name = textOf('h1.text-heading-xlarge') || textOf('h1');
+        const headline = textOf('.text-body-medium.break-words');
+        const location = textOf('.text-body-small.inline.t-black--light.break-words');
+        const connectionsEl = document.querySelector('li.text-body-small span.t-bold');
+        const connections = connectionsEl ? normalize(connectionsEl.textContent) : '';
+        const aboutSection = document.querySelector('#about ~ .display-flex .inline-show-more-text');
+        const about = aboutSection ? normalize(aboutSection.textContent) : '';
+        const expItems = Array.from(document.querySelectorAll('#experience ~ .pvs-list__outer-container li.pvs-list__paged-list-item')).slice(0, 3);
+        const experience = expItems.map(li => normalize(li.textContent).slice(0, 120)).join(' | ');
+        const eduItems = Array.from(document.querySelectorAll('#education ~ .pvs-list__outer-container li.pvs-list__paged-list-item')).slice(0, 2);
+        const education = eduItems.map(li => normalize(li.textContent).slice(0, 100)).join(' | ');
+
+        return [{
+          name, headline, location, connections, about: about.slice(0, 300),
+          experience, education, profile_url: window.location.href
+        }];
+      })()
+  - map:
+      name: ${{ item.name }}
+      headline: ${{ item.headline }}
+      location: ${{ item.location }}
+      connections: ${{ item.connections }}
+      about: ${{ item.about }}
+      experience: ${{ item.experience }}
+      education: ${{ item.education }}
+      profile_url: ${{ item.profile_url }}
