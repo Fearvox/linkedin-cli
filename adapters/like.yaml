@@ -1,0 +1,75 @@
+site: linkedin
+name: like
+description: Like a LinkedIn post by URL
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  url:
+    positional: true
+    type: string
+    required: true
+    description: "LinkedIn post URL"
+  dry-run:
+    type: bool
+    default: false
+    description: "Preview without liking"
+
+columns: [status, post_url, action]
+
+pipeline:
+  - navigate: ${{ args.url }}
+  - wait: 3
+  - evaluate: |
+      (async () => {
+        const postUrl = ${{ args.url | json }};
+        const dryRun = ${{ args['dry-run'] | json }};
+
+        let activityUrn = '';
+        const urnMatch = postUrl.match(/urn:li:activity:(\d+)/);
+        if (urnMatch) {
+          activityUrn = 'urn:li:activity:' + urnMatch[1];
+        } else {
+          const allEls = document.querySelectorAll('*');
+          for (const el of allEls) {
+            for (const attr of el.attributes) {
+              const m = attr.value.match(/urn:li:activity:(\d+)/);
+              if (m) { activityUrn = 'urn:li:activity:' + m[1]; break; }
+            }
+            if (activityUrn) break;
+          }
+        }
+        if (!activityUrn) throw new Error('Could not find activity URN on this page.');
+
+        if (dryRun) {
+          return [{ status: 'DRY_RUN', post_url: postUrl, action: 'LIKE ' + activityUrn }];
+        }
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        const res = await fetch('/voyager/api/voyagerSocialDashReactions?threadUrn=' + encodeURIComponent(activityUrn), {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'csrf-token': csrf,
+            'x-restli-protocol-version': '2.0.0',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reactionType: 'LIKE' }),
+        });
+
+        if (!res.ok) {
+          const err = await res.text();
+          throw new Error('Like failed: HTTP ' + res.status + ' — ' + err.slice(0, 200));
+        }
+
+        return [{ status: 'LIKED', post_url: postUrl, action: 'LIKE ' + activityUrn }];
+      })()
+  - map:
+      status: ${{ item.status }}
+      post_url: ${{ item.post_url }}
+      action: ${{ item.action }}
