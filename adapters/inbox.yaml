@@ -1,0 +1,119 @@
+site: linkedin
+name: inbox
+description: Read recent LinkedIn messages/conversations
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  limit:
+    type: int
+    default: 10
+    description: "Number of conversations to return"
+
+columns: [rank, participant, last_message, timestamp, unread]
+
+pipeline:
+  - navigate: "https://www.linkedin.com/messaging/"
+  - wait: 4
+  - evaluate: |
+      (async () => {
+        const limit = ${{ args.limit }};
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        // Try Voyager messaging API first
+        let apiError = null;
+        try {
+          const res = await fetch('/voyager/api/messaging/conversations?keyVersion=LEGACY_INBOX&q=syncToken&count=' + limit, {
+            credentials: 'include',
+            headers: {
+              'csrf-token': csrf,
+              'x-restli-protocol-version': '2.0.0',
+            }
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const elements = data?.elements || [];
+            // API succeeded and positively returned 0 conversations — not an error
+            return elements.slice(0, limit).map((conv, i) => {
+              const participants = (conv.participants || [])
+                .map(p => {
+                  const mp = p?.['com.linkedin.voyager.messaging.MessagingMember']?.miniProfile
+                    || p?.messagingMember?.miniProfile
+                    || p?.miniProfile;
+                  if (mp) return [mp.firstName, mp.lastName].filter(Boolean).join(' ');
+                  return '';
+                })
+                .filter(Boolean)
+                .join(', ');
+
+              const lastEvent = conv.events?.[0] || {};
+              const msgBody = lastEvent?.eventContent
+                ?.['com.linkedin.voyager.messaging.event.MessageEvent']?.body
+                || lastEvent?.subtype || '';
+              const ts = lastEvent?.createdAt
+                ? new Date(lastEvent.createdAt).toISOString()
+                : '';
+              const unread = conv.unreadCount > 0 ? 'yes' : 'no';
+
+              return {
+                rank: i + 1,
+                participant: participants || '(unknown)',
+                last_message: String(msgBody).slice(0, 200),
+                timestamp: ts,
+                unread: unread,
+              };
+            });
+          } else {
+            apiError = new Error('Voyager API returned HTTP ' + res.status);
+          }
+        } catch (e) {
+          apiError = e;
+        }
+
+        // Fallback: scrape the messaging page DOM
+        let domError = null;
+        const threads = Array.from(document.querySelectorAll('.msg-conversation-listitem, li.msg-conversations-container__convo-item, [data-control-name="view_message"]')).slice(0, limit);
+        const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+
+        const domResults = threads.map((el, i) => {
+          const nameEl = el.querySelector('.msg-conversation-listitem__participant-names, .msg-conversation-card__participant-names');
+          const msgEl = el.querySelector('.msg-conversation-listitem__message-snippet, .msg-conversation-card__message-snippet');
+          const timeEl = el.querySelector('.msg-conversation-listitem__time-stamp, .msg-conversation-card__time-stamp, time');
+          const unreadEl = el.querySelector('.notification-badge, .msg-conversation-listitem__unread-count');
+
+          return {
+            rank: i + 1,
+            participant: normalize(nameEl?.textContent),
+            last_message: normalize(msgEl?.textContent).slice(0, 200),
+            timestamp: normalize(timeEl?.textContent || timeEl?.getAttribute('datetime')),
+            unread: unreadEl ? 'yes' : 'no',
+          };
+        }).filter(item => item.participant);
+
+        if (domResults.length === 0) {
+          domError = new Error('DOM fallback found no conversation elements');
+        }
+
+        // Both paths failed — surface a combined error instead of returning empty array
+        if (domResults.length === 0) {
+          throw new Error(
+            'inbox: both API and DOM paths failed to produce results. ' +
+            'API error: ' + (apiError ? apiError.message : 'non-OK response') + '. ' +
+            'DOM error: ' + domError.message
+          );
+        }
+
+        return domResults;
+      })()
+  - map:
+      rank: ${{ item.rank }}
+      participant: ${{ item.participant }}
+      last_message: ${{ item.last_message }}
+      timestamp: ${{ item.timestamp }}
+      unread: ${{ item.unread }}
