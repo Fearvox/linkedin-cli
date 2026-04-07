@@ -77,7 +77,6 @@ pipeline:
         }
 
         // Fallback: scrape the messaging page DOM
-        let domError = null;
         const threads = Array.from(document.querySelectorAll('.msg-conversation-listitem, li.msg-conversations-container__convo-item, [data-control-name="view_message"]')).slice(0, limit);
         const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
 
@@ -96,16 +95,12 @@ pipeline:
           };
         }).filter(item => item.participant);
 
-        if (domResults.length === 0) {
-          domError = new Error('DOM fallback found no conversation elements');
-        }
-
         // Both paths failed — surface a combined error instead of returning empty array
         if (domResults.length === 0) {
           throw new Error(
             'inbox: both API and DOM paths failed to produce results. ' +
             'API error: ' + (apiError ? apiError.message : 'non-OK response') + '. ' +
-            'DOM error: ' + domError.message
+            'DOM error: DOM fallback found no conversation elements'
           );
         }
 
