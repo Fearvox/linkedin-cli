@@ -1,0 +1,188 @@
+site: linkedin
+name: notifications
+description: Read recent LinkedIn notifications
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  limit:
+    type: int
+    default: 15
+    description: "Number of notifications to return"
+
+columns: [rank, type, actor, text, timestamp, link]
+
+pipeline:
+  - navigate: "https://www.linkedin.com/notifications/"
+  - wait: 4
+  - evaluate: |
+      (async () => {
+        const limit = ${{ args.limit }};
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found. Sign in first.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        const headers = {
+          'csrf-token': csrf,
+          'x-restli-protocol-version': '2.0.0',
+          'accept': 'application/vnd.linkedin.normalized+json+2.1',
+        };
+
+        // --- Voyager notifications API ---
+        let results = [];
+        let apiError = null;
+        try {
+          const res = await fetch(
+            '/voyager/api/voyagerNotificationsDashNotifications?count=' + limit
+            + '&decorationId=com.linkedin.voyager.dash.deco.notifications.FullNotification-3'
+            + '&q=notifications',
+            { credentials: 'include', headers }
+          );
+
+          if (res.ok) {
+            const data = await res.json();
+            const included = data.included || [];
+            const elements = data.data?.['*elements'] || data.elements || [];
+
+            // Build lookup map for included entities
+            const entityMap = {};
+            for (const item of included) {
+              if (item.entityUrn) entityMap[item.entityUrn] = item;
+            }
+
+            for (const elemRef of elements) {
+              const elem = typeof elemRef === 'string'
+                ? entityMap[elemRef] || included.find(i => i.entityUrn === elemRef)
+                : elemRef;
+              if (!elem) continue;
+
+              // Extract actor name from headline template or actor reference
+              let actor = '';
+              const headline = elem.headline || elem.headerText || '';
+              if (typeof headline === 'object' && headline.text) {
+                actor = headline.text.split(/\s(?:liked|commented|shared|posted|viewed|endorsed|mentioned|replied|sent|accepted|started)/i)[0].trim();
+              } else if (typeof headline === 'string') {
+                actor = headline.split(/\s(?:liked|commented|shared|posted|viewed|endorsed|mentioned|replied|sent|accepted|started)/i)[0].trim();
+              }
+
+              // Notification type from template or $type
+              let nType = 'other';
+              const fullText = typeof headline === 'string' ? headline : headline?.text || '';
+              if (/\blike/i.test(fullText)) nType = 'like';
+              else if (/\bcomment/i.test(fullText)) nType = 'comment';
+              else if (/\bshare|repost/i.test(fullText)) nType = 'share';
+              else if (/\bview/i.test(fullText)) nType = 'view';
+              else if (/\bconnect|accept/i.test(fullText)) nType = 'connection';
+              else if (/\bmessag|DM/i.test(fullText)) nType = 'message';
+              else if (/\bendors/i.test(fullText)) nType = 'endorsement';
+              else if (/\bmentio/i.test(fullText)) nType = 'mention';
+              else if (/\bpost|publish/i.test(fullText)) nType = 'post';
+
+              // Timestamp
+              let ts = '';
+              if (elem.publishedAt) {
+                ts = new Date(elem.publishedAt).toISOString();
+              } else if (elem.createdAt) {
+                ts = new Date(elem.createdAt).toISOString();
+              }
+
+              // Navigation URL
+              const link = elem.navigationUrl
+                || elem.trackingData?.navigationUrl
+                || '';
+
+              results.push({
+                type: nType,
+                actor: actor.slice(0, 80),
+                text: fullText.slice(0, 200),
+                timestamp: ts,
+                link: link,
+              });
+
+              if (results.length >= limit) break;
+            }
+            // API succeeded — even if 0 results, this is a valid response
+            if (results.length === 0) {
+              return results.map((r, i) => ({ rank: i + 1, ...r }));
+            }
+          } else {
+            apiError = new Error('Voyager notifications API returned HTTP ' + res.status);
+          }
+        } catch (e) {
+          apiError = e;
+        }
+
+        // --- DOM scrape fallback (only when API failed) ---
+        if (results.length === 0 && apiError) {
+          const cards = document.querySelectorAll(
+            '.nt-card, '
+            + '.notification-card, '
+            + '.nt-card__text-container, '
+            + '[data-finite-scroll-hotkey-item], '
+            + '.scaffold-finite-scroll__content > li'
+          );
+
+          const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+
+          for (const card of cards) {
+            const textEl = card.querySelector(
+              '.nt-card__text, '
+              + '.notification-card__text, '
+              + '.nt-card__text--is-multi-line, '
+              + '[class*="notification"] span'
+            );
+            const timeEl = card.querySelector(
+              '.nt-card__time-ago, '
+              + '.notification-card__time-ago, '
+              + 'time'
+            );
+            const linkEl = card.querySelector('a[href]');
+
+            const text = normalize(textEl?.textContent);
+            if (!text) continue;
+
+            let actor = text.split(/\s(?:liked|commented|shared|posted|viewed|endorsed|mentioned|replied|sent|accepted|started)/i)[0].trim();
+
+            let nType = 'other';
+            if (/\blike/i.test(text)) nType = 'like';
+            else if (/\bcomment/i.test(text)) nType = 'comment';
+            else if (/\bshare|repost/i.test(text)) nType = 'share';
+            else if (/\bview/i.test(text)) nType = 'view';
+            else if (/\bconnect|accept/i.test(text)) nType = 'connection';
+            else if (/\bmessag|DM/i.test(text)) nType = 'message';
+            else if (/\bendors/i.test(text)) nType = 'endorsement';
+            else if (/\bmentio/i.test(text)) nType = 'mention';
+            else if (/\bpost|publish/i.test(text)) nType = 'post';
+
+            results.push({
+              type: nType,
+              actor: actor.slice(0, 80),
+              text: text.slice(0, 200),
+              timestamp: normalize(timeEl?.textContent || timeEl?.getAttribute('datetime')),
+              link: linkEl?.href || '',
+            });
+
+            if (results.length >= limit) break;
+          }
+        }
+
+        if (results.length === 0 && apiError) {
+          throw new Error(
+            'notifications: both API and DOM paths failed. '
+            + 'API error: ' + apiError.message + '. '
+            + 'DOM error: no notification elements found'
+          );
+        }
+
+        return results.map((r, i) => ({ rank: i + 1, ...r }));
+      })()
+  - map:
+      rank: ${{ item.rank }}
+      type: ${{ item.type }}
+      actor: ${{ item.actor }}
+      text: ${{ item.text }}
+      timestamp: ${{ item.timestamp }}
+      link: ${{ item.link }}

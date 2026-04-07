@@ -42,6 +42,7 @@ run_test "send-dm (dry-run)" opencli linkedin send-dm "williamhgates" --text "te
 run_test "search-people (read)" opencli linkedin search-people "software engineer" --limit 1 --format json
 run_test "connections (read)" opencli linkedin connections --limit 1 --format json
 run_test "inbox (read)" opencli linkedin inbox --limit 1 --format json
+run_test "notifications (read)" opencli linkedin notifications --limit 1 --format json
 
 # Prospect pipeline tests
 echo ""

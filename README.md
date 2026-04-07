@@ -31,6 +31,7 @@ Symlinks all YAML adapters into `~/.opencli/clis/linkedin/`.
 | `opencli linkedin search-people <query>` | Read | Search for people by keywords |
 | `opencli linkedin connections` | Read | List your connections |
 | `opencli linkedin inbox` | Read | Recent messages/conversations |
+| `opencli linkedin notifications` | Read | Recent notifications |
 
 All write commands support `--dry-run` to preview without executing.
 
