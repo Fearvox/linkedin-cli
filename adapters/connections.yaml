@@ -1,0 +1,256 @@
+site: linkedin
+name: connections
+description: List your LinkedIn connections
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  limit:
+    type: number
+    default: 50
+    description: "Max connections to return"
+  query:
+    type: string
+    default: ""
+    description: "Filter by name or keyword"
+
+columns: [rank, name, vanity, headline, connected_at, profile_url]
+
+pipeline:
+  - navigate: "https://www.linkedin.com/feed/"
+  - wait: 2
+  - evaluate: |
+      (async () => {
+        const limit = ${{ args.limit | json }};
+        const query = ${{ args.query | json }};
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found. Sign in first.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        const headers = {
+          'csrf-token': csrf,
+          'x-restli-protocol-version': '2.0.0',
+          'accept': 'application/vnd.linkedin.normalized+json+2.1',
+        };
+
+        // --- Voyager connections API ---
+        let results = [];
+        try {
+          const batchSize = 40;
+          let start = 0;
+          let hasMore = true;
+
+          while (hasMore && results.length < limit) {
+            const count = Math.min(batchSize, limit - results.length);
+            const params = new URLSearchParams({
+              q: 'search',
+              start: String(start),
+              count: String(count),
+              sortType: 'RECENTLY_ADDED',
+            });
+            if (query) {
+              params.set('keywords', query);
+            }
+
+            const res = await fetch(
+              '/voyager/api/relationships/dash/connections?' + params.toString(),
+              { credentials: 'include', headers }
+            );
+
+            if (!res.ok) break;
+
+            const data = await res.json();
+            const included = data.included || [];
+
+            // Gather mini-profiles from included objects
+            const miniProfiles = {};
+            for (const item of included) {
+              if (
+                item.$type === 'com.linkedin.voyager.dash.identity.profile.Profile'
+                || item.$type === 'com.linkedin.voyager.identity.shared.MiniProfile'
+                || (item.publicIdentifier && item.firstName)
+              ) {
+                const vanity = item.publicIdentifier;
+                if (vanity) miniProfiles[vanity] = item;
+              }
+            }
+
+            // Extract connection elements
+            const connections = included.filter(
+              item => item.$type === 'com.linkedin.voyager.dash.relationships.Connection'
+                   || item.$type === 'com.linkedin.voyager.relationships.dash.Connection'
+                   || item.createdAt !== undefined
+            );
+
+            if (connections.length === 0 && Object.keys(miniProfiles).length > 0) {
+              // Fallback: use mini-profiles directly when connection objects are absent
+              for (const vanity of Object.keys(miniProfiles)) {
+                const mp = miniProfiles[vanity];
+                results.push({
+                  name: [mp.firstName, mp.lastName].filter(Boolean).join(' '),
+                  vanity,
+                  headline: mp.occupation || mp.headline || '',
+                  connected_at: '',
+                  profile_url: 'https://www.linkedin.com/in/' + vanity,
+                });
+              }
+            } else {
+              for (const conn of connections) {
+                // Resolve the linked profile
+                const profileRef = conn['*connectedMemberResolutionResult']
+                  || conn['*miniProfile']
+                  || conn['*member']
+                  || '';
+                const profileId = typeof profileRef === 'string'
+                  ? profileRef.replace(/^urn:li:fsd_profile:/, '')
+                  : '';
+
+                // Match profile by entityUrn or publicIdentifier
+                let mp = null;
+                for (const vanity of Object.keys(miniProfiles)) {
+                  const p = miniProfiles[vanity];
+                  const urn = p.entityUrn || p['*entityUrn'] || '';
+                  if (urn.includes(profileId) || vanity === profileId) {
+                    mp = p;
+                    break;
+                  }
+                }
+
+                const name = mp
+                  ? [mp.firstName, mp.lastName].filter(Boolean).join(' ')
+                  : '';
+                const vanity = mp ? mp.publicIdentifier || '' : '';
+                const headline = mp ? (mp.occupation || mp.headline || '') : '';
+
+                // Format createdAt timestamp
+                let connectedAt = '';
+                if (conn.createdAt) {
+                  const d = new Date(conn.createdAt);
+                  if (!isNaN(d.getTime())) {
+                    connectedAt = d.toISOString().slice(0, 10);
+                  }
+                }
+
+                if (!name && !vanity) continue;
+
+                results.push({
+                  name,
+                  vanity,
+                  headline,
+                  connected_at: connectedAt,
+                  profile_url: vanity
+                    ? 'https://www.linkedin.com/in/' + vanity
+                    : '',
+                });
+              }
+            }
+
+            // Pagination
+            const elements = data.data?.['*elements'] || data.elements || [];
+            const paging = data.data?.paging || data.paging || {};
+            const total = paging.total || 0;
+            start += batchSize;
+            hasMore = elements.length >= count
+              || (total > 0 && start < total);
+          }
+        } catch (_) {
+          // Voyager API failed; fall through to DOM fallback
+        }
+
+        // --- DOM scrape fallback ---
+        if (results.length === 0) {
+          const connUrl = 'https://www.linkedin.com/mynetwork/invite-connect/connections/'
+            + (query ? '?keywords=' + encodeURIComponent(query) : '');
+          window.location.href = connUrl;
+
+          // Wait for page to render
+          await new Promise(r => setTimeout(r, 4000));
+
+          // Scroll to load more connections
+          const scrollAttempts = Math.ceil(limit / 10);
+          for (let i = 0; i < scrollAttempts; i++) {
+            window.scrollTo(0, document.body.scrollHeight);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+
+          const cards = document.querySelectorAll(
+            '.mn-connection-card, '
+            + '.scaffold-finite-scroll__content li, '
+            + '[data-view-name="connection-card"], '
+            + '.mn-connections li'
+          );
+
+          for (const card of cards) {
+            const nameEl = card.querySelector(
+              '.mn-connection-card__name, '
+              + '.entity-result__title-text a span[aria-hidden="true"], '
+              + 'span.mn-connection-card__name'
+            );
+            const linkEl = card.querySelector(
+              '.mn-connection-card__link, '
+              + 'a.app-aware-link, '
+              + 'a[href*="/in/"]'
+            );
+            const subtitleEl = card.querySelector(
+              '.mn-connection-card__occupation, '
+              + '.entity-result__primary-subtitle'
+            );
+            const timeEl = card.querySelector(
+              '.mn-connection-card__connected-time, '
+              + 'time, '
+              + '.time-badge'
+            );
+
+            const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+            const name = normalize(nameEl?.textContent);
+            const href = linkEl?.href || '';
+            const vanityMatch = href.match(/\/in\/([^/?]+)/);
+            const vanity = vanityMatch ? vanityMatch[1] : '';
+            const headline = normalize(subtitleEl?.textContent);
+            const connectedAt = normalize(timeEl?.textContent);
+
+            if (!name) continue;
+
+            results.push({
+              name,
+              vanity,
+              headline,
+              connected_at: connectedAt,
+              profile_url: vanity
+                ? 'https://www.linkedin.com/in/' + vanity
+                : href,
+            });
+          }
+        }
+
+        // Deduplicate by vanity
+        const seen = new Set();
+        results = results.filter(r => {
+          const key = r.vanity || r.name;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        // Apply limit and add rank
+        results = results.slice(0, limit).map((r, i) => ({
+          rank: i + 1,
+          ...r,
+        }));
+
+        if (results.length === 0) {
+          throw new Error('No connections found.' + (query ? ' Try a different keyword.' : ' Check your LinkedIn session.'));
+        }
+
+        return results;
+      })()
+  - map:
+      rank: ${{ item.rank }}
+      name: ${{ item.name }}
+      vanity: ${{ item.vanity }}
+      headline: ${{ item.headline }}
+      connected_at: ${{ item.connected_at }}
+      profile_url: ${{ item.profile_url }}
