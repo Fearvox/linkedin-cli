@@ -612,7 +612,254 @@ PYEOF
   echo ""
   echo "Review complete: $approved approved, $skipped skipped, $deferred deferred"
 }
-cmd_outreach() { echo "outreach: not implemented yet"; exit 1; }
+cmd_outreach() {
+  local template=""
+  local dry_run=false
+  local batch=20
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --template)  template="$2"; shift 2 ;;
+      --dry-run)   dry_run=true; shift ;;
+      --batch)     batch="$2"; shift 2 ;;
+      --help|-h)   usage; return 0 ;;
+      -*)          echo "Unknown option: $1" >&2; usage; exit 1 ;;
+      *)           echo "Unknown argument: $1" >&2; usage; exit 1 ;;
+    esac
+  done
+
+  # Validate --template is provided
+  if [[ -z "$template" ]]; then
+    echo "Error: --template PATH is required" >&2
+    echo "" >&2
+    echo "Usage: prospect.sh outreach --template <path> [--dry-run] [--batch N]" >&2
+    exit 1
+  fi
+
+  # Resolve template path relative to project root
+  local template_path="$PROJECT_DIR/$template"
+  if [[ ! -f "$template_path" ]]; then
+    echo "Error: template file not found: $template_path" >&2
+    exit 1
+  fi
+
+  # Cap batch at 20
+  if [[ "$batch" -gt 20 ]]; then
+    echo "Warning: batch capped at 20 (LinkedIn rate limit protection)"
+    batch=20
+  fi
+
+  # Read approved leads
+  local approved_leads
+  approved_leads=$(python3 - "$LEADS_FILE" <<'PYEOF'
+import json, sys
+
+leads_file = sys.argv[1]
+try:
+    with open(leads_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                lead = json.loads(line)
+                if lead.get("status") == "approved":
+                    print(json.dumps(lead, ensure_ascii=False))
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    pass
+PYEOF
+  )
+
+  if [[ -z "$approved_leads" ]]; then
+    echo "No approved leads. Run 'prospect.sh review' first."
+    return 0
+  fi
+
+  # Read template content
+  local template_content
+  template_content=$(<"$template_path")
+
+  # Count approved leads
+  local total
+  total=$(echo "$approved_leads" | wc -l | tr -d ' ')
+  if [[ "$total" -gt "$batch" ]]; then
+    total="$batch"
+  fi
+
+  local sent=0
+  local idx=0
+
+  # Collect updates for post-send status changes (vanity \t timestamp)
+  local updates_tmp
+  updates_tmp=$(mktemp)
+  trap "rm -f '$updates_tmp'" EXIT
+
+  while IFS= read -r lead_json; do
+    [[ -z "$lead_json" ]] && continue
+    idx=$((idx + 1))
+    if [[ $idx -gt $batch ]]; then
+      break
+    fi
+
+    # Extract fields via python3
+    local lead_info
+    lead_info=$(python3 -c "
+import json, sys
+lead = json.loads(sys.argv[1])
+name = lead.get('name', '')
+vanity = lead.get('vanity', '')
+company = lead.get('company', '')
+print(f'{name}\t{vanity}\t{company}')
+" "$lead_json")
+
+    local name vanity company
+    IFS=$'\t' read -r name vanity company <<< "$lead_info"
+
+    # Extract first_name (first word of name)
+    local first_name
+    first_name=$(echo "$name" | awk '{print $1}')
+
+    # Substitute template variables
+    local message
+    message="${template_content//\{\{first_name\}\}/$first_name}"
+    message="${message//\{\{company\}\}/$company}"
+    message="${message//\{\{name\}\}/$name}"
+
+    if [[ "$dry_run" == true ]]; then
+      echo "[$idx/$total] TO: $name ($vanity)"
+      echo "$message"
+      echo ""
+      sent=$((sent + 1))
+    else
+      echo "[$idx/$total] Sending to $name ($vanity)..."
+
+      # Write message to temp file to handle newlines and special characters safely
+      local msg_tmp
+      msg_tmp=$(mktemp)
+      printf '%s' "$message" > "$msg_tmp"
+
+      local send_result
+      send_result=$(python3 - "$vanity" "$msg_tmp" <<'PYEOF'
+import subprocess, sys, json
+
+vanity = sys.argv[1]
+msg_file = sys.argv[2]
+
+with open(msg_file, "r") as f:
+    msg_text = f.read()
+
+try:
+    result = subprocess.run(
+        ["opencli", "linkedin", "send-dm", vanity, "--text", msg_text, "--format", "json"],
+        capture_output=True, text=True, timeout=60
+    )
+    if result.returncode == 0:
+        print("OK")
+    else:
+        print(f"FAIL: {result.stderr.strip() or result.stdout.strip()}")
+except Exception as e:
+    print(f"FAIL: {e}")
+PYEOF
+      )
+      rm -f "$msg_tmp"
+
+      if [[ "$send_result" == "OK" ]]; then
+        echo "  Sent successfully"
+        sent=$((sent + 1))
+        local ts
+        ts=$(now_iso)
+        echo "$vanity	$ts" >> "$updates_tmp"
+      else
+        echo "  $send_result" >&2
+      fi
+
+      # Rate limit: sleep 10 seconds between sends (skip after last one)
+      if [[ $idx -lt $total ]]; then
+        sleep 10
+      fi
+    fi
+
+  done <<< "$approved_leads"
+
+  # Update leads.jsonl with contacted status (non-dry-run only)
+  if [[ "$dry_run" == false && -s "$updates_tmp" ]]; then
+    python3 - "$LEADS_FILE" "$updates_tmp" "$template" <<'PYEOF'
+import json, sys, tempfile, os
+
+leads_file = sys.argv[1]
+updates_file = sys.argv[2]
+dm_template = sys.argv[3]
+
+# Load updates: vanity -> timestamp
+updates = {}
+with open(updates_file, "r") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t", 1)
+        if len(parts) == 2:
+            updates[parts[0]] = parts[1]
+
+if not updates:
+    sys.exit(0)
+
+# Rewrite leads.jsonl atomically
+tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(leads_file), suffix=".jsonl")
+try:
+    with os.fdopen(tmp_fd, "w") as out:
+        with open(leads_file, "r") as inp:
+            for line in inp:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    lead = json.loads(raw)
+                    vanity = lead.get("vanity", "")
+                    if vanity in updates:
+                        lead["status"] = "contacted"
+                        lead["contacted_at"] = updates[vanity]
+                        lead["dm_template"] = dm_template
+                    out.write(json.dumps(lead, ensure_ascii=False) + "\n")
+                except json.JSONDecodeError:
+                    out.write(raw + "\n")
+    os.replace(tmp_path, leads_file)
+except Exception:
+    os.unlink(tmp_path)
+    raise
+PYEOF
+  fi
+
+  # Report
+  if [[ "$dry_run" == true ]]; then
+    echo "Dry run complete: $sent messages previewed"
+  else
+    local remaining
+    remaining=$(python3 -c "
+import json, sys
+leads_file = sys.argv[1]
+count = 0
+try:
+    with open(leads_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                lead = json.loads(line)
+                if lead.get('status') == 'approved':
+                    count += 1
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    pass
+print(count)
+" "$LEADS_FILE")
+    echo "Done: sent $sent messages, $remaining remaining"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Main dispatcher
