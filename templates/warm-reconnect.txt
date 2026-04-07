@@ -1,0 +1,7 @@
+Hi {{first_name}},
+
+It's been a while — hope things are going well at {{company}}. I've been building tools for hotel operations teams lately and thought of you.
+
+Would love to catch up briefly if you're open to it.
+
+Nolan

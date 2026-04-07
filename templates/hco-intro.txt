@@ -1,0 +1,10 @@
+Hi {{first_name}},
+
+I noticed you're working in hotel operations at {{company}}. We've built a system that automates cashback reconciliation — replacing the Excel spreadsheets with an auditable, tamper-proof workflow.
+
+It handles the messy parts: name mismatches across booking systems, split reservations, and reused confirmation numbers.
+
+Would love to share a quick demo if this is relevant to your team. No pressure either way.
+
+Best,
+Nolan

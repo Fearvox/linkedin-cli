@@ -1,0 +1,7 @@
+Hi {{first_name}},
+
+Given your role at {{company}}, I imagine you deal with hotel bookings and cashback programs regularly. We're exploring a personal tool that tracks cashback flows across bookings — so you always know what's been claimed vs. what's actually returned.
+
+Still early stage, but would value your perspective as someone who lives this daily. Open to a quick chat?
+
+Nolan
