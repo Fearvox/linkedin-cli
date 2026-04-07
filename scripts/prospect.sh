@@ -435,7 +435,183 @@ PYEOF
   fi
   echo "Done: scanned $count leads, avg score: $avg_score"
 }
-cmd_review()   { echo "review: not implemented yet";   exit 1; }
+cmd_review() {
+  # ---------------------------------------------------------------------------
+  # Step 1: Extract scanned leads sorted by total_score descending
+  # ---------------------------------------------------------------------------
+  local sorted_leads
+  sorted_leads=$(python3 - "$LEADS_FILE" <<'PYEOF'
+import json, sys
+
+leads_file = sys.argv[1]
+scanned = []
+try:
+    with open(leads_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                lead = json.loads(line)
+                if lead.get("status") == "scanned":
+                    scanned.append(lead)
+            except json.JSONDecodeError:
+                continue
+except FileNotFoundError:
+    pass
+
+# Sort by total_score descending
+scanned.sort(key=lambda x: x.get("total_score", 0), reverse=True)
+
+for lead in scanned:
+    print(json.dumps(lead, ensure_ascii=False))
+PYEOF
+  )
+
+  if [[ -z "$sorted_leads" ]]; then
+    echo "No scanned leads to review."
+    return 0
+  fi
+
+  # Count total scanned leads
+  local total
+  total=$(echo "$sorted_leads" | wc -l | tr -d ' ')
+
+  # ---------------------------------------------------------------------------
+  # Step 2: Interactive review loop
+  # ---------------------------------------------------------------------------
+  local idx=0
+  local approved=0
+  local skipped=0
+  local deferred=0
+  local quit_early=false
+
+  # Collect decisions as vanity:status pairs in a temp file
+  local decisions_tmp
+  decisions_tmp=$(mktemp)
+  trap "rm -f '$decisions_tmp'" EXIT
+
+  while IFS= read -r lead_json; do
+    [[ -z "$lead_json" ]] && continue
+    idx=$((idx + 1))
+
+    # Extract display fields via python3
+    local display_info
+    display_info=$(python3 -c "
+import json, sys
+lead = json.loads(sys.argv[1])
+name = lead.get('name', 'Unknown')
+headline = lead.get('headline', '')
+company = lead.get('company', '')
+score = lead.get('total_score', 0)
+notes = lead.get('notes', '')
+vanity = lead.get('vanity', '')
+recommended = '1' if 'recommended' in notes.lower() else '0'
+print(f'{vanity}\t{name}\t{headline}\t{company}\t{score}\t{recommended}')
+" "$lead_json")
+
+    local vanity name headline company score recommended
+    IFS=$'\t' read -r vanity name headline company score recommended <<< "$display_info"
+
+    # Build display
+    local star=""
+    if [[ "$recommended" == "1" ]]; then
+      star=" ★"
+    fi
+
+    echo ""
+    echo "[$idx/$total] $name | $headline | score:${score}${star}"
+    if [[ -n "$company" ]]; then
+      echo "  Company: $company"
+    fi
+    echo "─────────────────────────────────"
+
+    # Read user input from /dev/tty
+    local choice=""
+    printf "  [y] approve  [n] skip  [s] star for later  [q] quit: "
+    read -r choice </dev/tty || choice=""
+
+    case "$choice" in
+      y|Y)
+        echo "$vanity	approved" >> "$decisions_tmp"
+        approved=$((approved + 1))
+        ;;
+      n|N)
+        echo "$vanity	skipped" >> "$decisions_tmp"
+        skipped=$((skipped + 1))
+        ;;
+      s|S)
+        # Keep as scanned — no decision recorded
+        deferred=$((deferred + 1))
+        ;;
+      q|Q)
+        deferred=$((deferred + (total - idx)))
+        quit_early=true
+        break
+        ;;
+      *)
+        # Anything else: keep as scanned
+        deferred=$((deferred + 1))
+        ;;
+    esac
+
+  done <<< "$sorted_leads"
+
+  # ---------------------------------------------------------------------------
+  # Step 3: Apply all decisions to leads.jsonl atomically
+  # ---------------------------------------------------------------------------
+  python3 - "$LEADS_FILE" "$decisions_tmp" <<'PYEOF'
+import json, sys, tempfile, os
+
+leads_file = sys.argv[1]
+decisions_file = sys.argv[2]
+
+# Load decisions: vanity -> new status
+decisions = {}
+try:
+    with open(decisions_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                decisions[parts[0]] = parts[1]
+except FileNotFoundError:
+    pass
+
+if not decisions:
+    sys.exit(0)
+
+# Rewrite leads.jsonl with updated statuses
+tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(leads_file), suffix=".jsonl")
+try:
+    with os.fdopen(tmp_fd, "w") as out:
+        with open(leads_file, "r") as inp:
+            for line in inp:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    lead = json.loads(raw)
+                    vanity = lead.get("vanity", "")
+                    if vanity in decisions:
+                        lead["status"] = decisions[vanity]
+                    out.write(json.dumps(lead, ensure_ascii=False) + "\n")
+                except json.JSONDecodeError:
+                    out.write(raw + "\n")
+    os.replace(tmp_path, leads_file)
+except Exception:
+    os.unlink(tmp_path)
+    raise
+PYEOF
+
+  # ---------------------------------------------------------------------------
+  # Step 4: Report
+  # ---------------------------------------------------------------------------
+  echo ""
+  echo "Review complete: $approved approved, $skipped skipped, $deferred deferred"
+}
 cmd_outreach() { echo "outreach: not implemented yet"; exit 1; }
 
 # ---------------------------------------------------------------------------
