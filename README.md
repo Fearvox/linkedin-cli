@@ -28,6 +28,9 @@ Symlinks all YAML adapters into `~/.opencli/clis/linkedin/`.
 | `opencli linkedin comment <url> --text "..."` | Write | Comment on a post |
 | `opencli linkedin repost <url>` | Write | Repost with optional commentary |
 | `opencli linkedin send-dm <profile> --text "..."` | Write | DM a connection |
+| `opencli linkedin search-people <query>` | Read | Search for people by keywords |
+| `opencli linkedin connections` | Read | List your connections |
+| `opencli linkedin inbox` | Read | Recent messages/conversations |
 
 All write commands support `--dry-run` to preview without executing.
 
@@ -62,3 +65,40 @@ opencli linkedin profile "https://www.linkedin.com/in/username" --format json
 ```bash
 bash tests/test-all.sh
 ```
+
+## Prospect Pipeline
+
+Semi-automated prospecting for Dash/HCO customer acquisition.
+
+### Workflow
+
+```bash
+# 1. Search for potential customers
+./scripts/prospect.sh search "hotel revenue manager" --limit 20
+
+# 2. Scan profiles and score leads
+./scripts/prospect.sh scan
+
+# 3. Review and approve candidates
+./scripts/prospect.sh review
+
+# 4. Preview outreach messages
+./scripts/prospect.sh outreach --template templates/hco-intro.txt --dry-run
+
+# 5. Send approved messages
+./scripts/prospect.sh outreach --template templates/hco-intro.txt
+```
+
+### Templates
+
+| Template | Target | Use Case |
+|----------|--------|----------|
+| `hco-intro.txt` | B2B hotel operations | Product introduction |
+| `hco-traveler.txt` | B2C frequent travelers | Personal tool pitch |
+| `warm-reconnect.txt` | Existing connections | Warm re-engagement |
+
+### Lead Status Lifecycle
+
+`new` → `scanned` → `approved`/`skipped` → `contacted` → `replied`
+
+Leads are stored in `data/leads.jsonl` (gitignored).
