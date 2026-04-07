@@ -1,0 +1,200 @@
+site: linkedin
+name: search-people
+description: Search LinkedIn for people by keywords
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  query:
+    positional: true
+    type: string
+    required: true
+    description: "Search keywords (e.g. 'hotel revenue manager')"
+  location:
+    type: string
+    default: ""
+    description: "Geographic filter"
+  limit:
+    type: number
+    default: 20
+    description: "Max results to return"
+
+columns: [rank, name, vanity, headline, location, profile_url]
+
+pipeline:
+  - navigate: "https://www.linkedin.com/feed/"
+  - wait: 2
+  - evaluate: |
+      (async () => {
+        const query = ${{ args.query | json }};
+        const locationFilter = ${{ args.location | json }};
+        const limit = ${{ args.limit | json }};
+
+        const jsession = document.cookie.split(';').map(p => p.trim())
+          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
+        if (!jsession) throw new Error('LinkedIn JSESSIONID not found. Sign in first.');
+        const csrf = jsession.replace(/^"|"$/g, '');
+
+        const headers = {
+          'csrf-token': csrf,
+          'x-restli-protocol-version': '2.0.0',
+          'accept': 'application/vnd.linkedin.normalized+json+2.1',
+        };
+
+        // --- Voyager search API ---
+        let results = [];
+        try {
+          const params = new URLSearchParams({
+            q: 'all',
+            origin: 'GLOBAL_SEARCH_HEADER',
+            keywords: query,
+            'queryParameters.resultType': 'List(PEOPLE)',
+            start: '0',
+            count: String(Math.min(limit, 49)),
+          });
+
+          const res = await fetch('/voyager/api/search/dash/clusters?' + params.toString(), {
+            credentials: 'include',
+            headers,
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            const included = data.included || [];
+
+            // Extract entity results from included objects
+            const entityResults = included.filter(
+              item => item.$type === 'com.linkedin.voyager.dash.search.EntityResultViewModel'
+                   || item['*navigationUrl'] !== undefined
+                   || (item.title && item.navigationUrl)
+            );
+
+            // Also gather mini-profiles for richer data
+            const miniProfiles = {};
+            for (const item of included) {
+              if (item.$type === 'com.linkedin.voyager.dash.identity.profile.Profile'
+                || item.$type === 'com.linkedin.voyager.identity.shared.MiniProfile'
+                || (item.publicIdentifier && item.firstName)) {
+                const vanity = item.publicIdentifier;
+                if (vanity) miniProfiles[vanity] = item;
+              }
+            }
+
+            // Build results from entity items
+            for (const entity of entityResults) {
+              const navUrl = entity.navigationUrl || '';
+              const vanityMatch = navUrl.match(/\/in\/([^/?]+)/);
+              const vanity = vanityMatch ? vanityMatch[1] : '';
+
+              const titleText = entity.title?.text || '';
+              const primarySubtitle = entity.primarySubtitle?.text || '';
+              const secondarySubtitle = entity.secondarySubtitle?.text || '';
+
+              // Use mini-profile data as enrichment
+              const mp = miniProfiles[vanity] || {};
+              const name = titleText
+                || [mp.firstName, mp.lastName].filter(Boolean).join(' ')
+                || '';
+              const headline = primarySubtitle || mp.occupation || '';
+              const location = secondarySubtitle || mp.locationName || '';
+
+              if (!name && !vanity) continue;
+
+              results.push({
+                name,
+                vanity,
+                headline,
+                location,
+                profile_url: vanity
+                  ? 'https://www.linkedin.com/in/' + vanity
+                  : navUrl,
+              });
+            }
+          }
+        } catch (_) {
+          // Voyager API failed; fall through to DOM fallback
+        }
+
+        // --- DOM scrape fallback ---
+        if (results.length === 0) {
+          const searchUrl = 'https://www.linkedin.com/search/results/people/?keywords='
+            + encodeURIComponent(query)
+            + (locationFilter ? '&geoUrn=' + encodeURIComponent(locationFilter) : '')
+            + '&origin=GLOBAL_SEARCH_HEADER';
+          window.location.href = searchUrl;
+
+          // Wait for search results to render
+          await new Promise(r => setTimeout(r, 4000));
+
+          const containers = document.querySelectorAll(
+            '.reusable-search__result-container, .entity-result, li.reusable-search__result-container'
+          );
+
+          for (const card of containers) {
+            const nameEl = card.querySelector(
+              '.entity-result__title-text a span[aria-hidden="true"], '
+              + '.entity-result__title-text a span:first-child, '
+              + 'span.entity-result__title-text'
+            );
+            const linkEl = card.querySelector(
+              '.entity-result__title-text a, a.app-aware-link'
+            );
+            const subtitleEl = card.querySelector(
+              '.entity-result__primary-subtitle, '
+              + '.entity-result__summary'
+            );
+            const locEl = card.querySelector(
+              '.entity-result__secondary-subtitle'
+            );
+
+            const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
+            const name = normalize(nameEl?.textContent);
+            const href = linkEl?.href || '';
+            const vanityMatch = href.match(/\/in\/([^/?]+)/);
+            const vanity = vanityMatch ? vanityMatch[1] : '';
+            const headline = normalize(subtitleEl?.textContent);
+            const location = normalize(locEl?.textContent);
+
+            if (!name) continue;
+
+            results.push({
+              name,
+              vanity,
+              headline,
+              location,
+              profile_url: vanity
+                ? 'https://www.linkedin.com/in/' + vanity
+                : href,
+            });
+          }
+        }
+
+        // Deduplicate by vanity
+        const seen = new Set();
+        results = results.filter(r => {
+          const key = r.vanity || r.name;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+
+        // Apply limit and add rank
+        results = results.slice(0, limit).map((r, i) => ({
+          rank: i + 1,
+          ...r,
+        }));
+
+        if (results.length === 0) {
+          throw new Error('No results found for "' + query + '". Check your search terms or LinkedIn session.');
+        }
+
+        return results;
+      })()
+  - map:
+      rank: ${{ item.rank }}
+      name: ${{ item.name }}
+      vanity: ${{ item.vanity }}
+      headline: ${{ item.headline }}
+      location: ${{ item.location }}
+      profile_url: ${{ item.profile_url }}
