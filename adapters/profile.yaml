@@ -12,7 +12,7 @@ args:
     required: true
     description: "LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)"
 
-columns: [name, headline, location, connections, about, experience, education, profile_url]
+columns: [name, headline, location, connections, about, experience, education, profile_url, industry, current_company, post_count, travel_signals]
 
 pipeline:
   - navigate: ${{ args.url }}
@@ -34,9 +34,24 @@ pipeline:
         const eduItems = Array.from(document.querySelectorAll('#education ~ .pvs-list__outer-container li.pvs-list__paged-list-item')).slice(0, 2);
         const education = eduItems.map(li => normalize(li.textContent).slice(0, 100)).join(' | ');
 
+        const allText = [headline, about, experience].join(' ').toLowerCase();
+        const industryKeywords = ['hotel', 'hospitality', 'ota', 'travel', 'tourism', 'lodging', 'resort', 'booking'];
+        const industry = industryKeywords.filter(k => allText.includes(k)).join(', ');
+
+        const firstExp = expItems[0];
+        const companyEl = firstExp?.querySelector('.t-14.t-normal span[aria-hidden="true"]');
+        const current_company = companyEl ? normalize(companyEl.textContent).split(' · ')[0] : '';
+
+        const activityCount = document.querySelector('.pvs-header__optional-link span.t-bold');
+        const post_count = activityCount ? normalize(activityCount.textContent).replace(/[^0-9]/g, '') : '0';
+
+        const travelKeywords = ['travel', 'frequent flyer', 'business travel', '出差', '差旅', 'on the road', 'global traveler'];
+        const travel_signals = travelKeywords.filter(k => allText.includes(k)).join(', ');
+
         return [{
           name, headline, location, connections, about: about.slice(0, 300),
-          experience, education, profile_url: window.location.href
+          experience, education, profile_url: window.location.href,
+          industry, current_company, post_count, travel_signals
         }];
       })()
   - map:
@@ -48,3 +63,7 @@ pipeline:
       experience: ${{ item.experience }}
       education: ${{ item.education }}
       profile_url: ${{ item.profile_url }}
+      industry: ${{ item.industry }}
+      current_company: ${{ item.current_company }}
+      post_count: ${{ item.post_count }}
+      travel_signals: ${{ item.travel_signals }}
