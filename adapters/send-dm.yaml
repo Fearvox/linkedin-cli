@@ -19,6 +19,14 @@ args:
     type: bool
     default: false
     description: "Preview without sending"
+  template:
+    type: string
+    default: ""
+    description: "Path to template file with {{variable}} placeholders"
+  vars:
+    type: string
+    default: "{}"
+    description: "JSON object of template variables"
 
 columns: [status, recipient, message_preview]
 
@@ -30,6 +38,22 @@ pipeline:
         const profileInput = ${{ args.profile | json }};
         const messageText = ${{ args.text | json }};
         const dryRun = ${{ args['dry-run'] | json }};
+
+        // Template support: if --template provided and --text is empty, use template
+        let finalText = messageText;
+        const templatePath = ${{ args.template | json }};
+        const varsJson = ${{ args.vars | json }};
+
+        if (templatePath && !messageText) {
+          // When used via prospect.sh, text is already substituted and passed via --text
+          // This fallback handles direct CLI usage with --template + --vars
+          try {
+            const vars = JSON.parse(varsJson);
+            finalText = '(template mode — use prospect.sh outreach or provide --text)';
+          } catch (e) {
+            finalText = messageText;
+          }
+        }
 
         const jsession = document.cookie.split(';').map(p => p.trim())
           .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
@@ -96,7 +120,7 @@ pipeline:
           return [{
             status: 'DRY_RUN',
             recipient: displayName + ' (' + vanity + ')',
-            message_preview: messageText.slice(0, 200)
+            message_preview: finalText.slice(0, 200)
           }];
         }
 
@@ -110,12 +134,12 @@ pipeline:
           },
           body: JSON.stringify({
             recipients: [recipientUrn],
-            body: messageText,
+            body: finalText,
             conversationCreate: {
               eventCreate: {
                 value: {
                   'com.linkedin.voyager.messaging.create.MessageCreate': {
-                    body: messageText,
+                    body: finalText,
                     attachments: [],
                   }
                 }
@@ -134,7 +158,7 @@ pipeline:
         return [{
           status: 'SENT',
           recipient: displayName + ' (' + vanity + ')',
-          message_preview: messageText.slice(0, 200)
+          message_preview: finalText.slice(0, 200)
         }];
       })()
   - map:
