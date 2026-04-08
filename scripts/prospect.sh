@@ -151,10 +151,13 @@ with open(leads_file, "a") as f:
             skipped += 1
             continue
 
-        # Quality gate: skip profiles with suspiciously short headlines
-        # (< 20 chars = "Revenue Manager" level — profile incomplete, low signal)
+        # Quality gate: lightweight pre-filter during search
         headline = result.get("headline", "")
         if len(headline) < 20:
+            skipped += 1
+            continue
+        alpha = [c for c in headline if c.isalpha()]
+        if alpha and sum(1 for c in alpha if c.isupper()) / len(alpha) > 0.7 and len(headline) > 10:
             skipped += 1
             continue
 
@@ -166,8 +169,16 @@ with open(leads_file, "a") as f:
             "headline": result.get("headline", ""),
             "company": "",
             "industry_score": 0,
+            "seniority_score": 0,
+            "company_tier": 0,
+            "proximity_score": 0,
+            "activity_score": 0,
+            "resonance_score": 0,
+            "authority": 0,
+            "relevance": 0,
             "travel_score": 0,
             "total_score": 0,
+            "tier": "",
             "status": "new",
             "dm_template": "",
             "dm_preview": "",
@@ -319,113 +330,175 @@ p_company = str(profile_data.get("current_company", ""))
 
 all_text = f"{p_headline} {p_about} {p_experience}"
 
-# --- Scoring ---
+# ============================================================
+# SCORING ENGINE — Gated Cascade + Normalized Multi-Axis
+# ============================================================
 
-# 1. Industry keyword match: +3 per keyword found in headline + about + experience
-industry_keywords = ["hotel", "hospitality", "ota", "cashback", "reconciliation",
-                     "revenue", "booking", "travel agency"]
-industry_score = 0
-matched_industry = set()
-for kw in industry_keywords:
-    if kw in all_text:
-        matched_industry.add(kw)
-# Also check pre-extracted industry field from profile adapter
+# ---- Stage 1: Quality Gate ----
+quality_signals = 0
+headline_raw = str(profile_data.get("headline", ""))
+
+if len(headline_raw) >= 20:
+    quality_signals += 1
+if len(headline_raw) >= 50:
+    quality_signals += 1
+
+alpha_chars = [c for c in headline_raw if c.isalpha()]
+if alpha_chars:
+    caps_ratio = sum(1 for c in alpha_chars if c.isupper()) / len(alpha_chars)
+    if caps_ratio > 0.7 and len(headline_raw) > 10:
+        quality_signals -= 2
+
+JOBSEEKER_PHRASES = ["looking for", "seeking", "open to", "actively looking",
+                     "available for", "in transition", "aspiring", "freelance"]
+if any(phrase in p_headline for phrase in JOBSEEKER_PHRASES):
+    quality_signals -= 2
+
+if " at " in headline_raw or " @ " in headline_raw or "|" in headline_raw:
+    quality_signals += 1
+
+if p_about and len(p_about) > 50:
+    quality_signals += 1
+
+if p_experience and len(p_experience) > 30:
+    quality_signals += 1
+
+profile_quality = max(quality_signals, 0)
+
+if profile_quality < 2:
+    original_lead["tier"] = "D"
+    original_lead["total_score"] = 0
+    original_lead["status"] = "scanned"
+    original_lead["notes"] = "quality_gate_failed"
+    print(json.dumps(original_lead, ensure_ascii=False))
+    sys.exit(0)
+
+# ---- Stage 2: Industry Gate ----
+CORE_INDUSTRY = ["hotel", "hospitality", "ota", "resort", "lodging"]
+ADJACENT_INDUSTRY = ["cashback", "reconciliation", "revenue", "booking",
+                     "travel agency", "travel tech", "property management"]
+
+core_matches = [kw for kw in CORE_INDUSTRY if kw in all_text]
+adjacent_matches = [kw for kw in ADJACENT_INDUSTRY if kw in all_text]
+
 if p_industry:
     for part in p_industry.split(","):
-        part = part.strip()
-        if part and part in [k for k in industry_keywords]:
-            matched_industry.add(part)
-industry_score = len(matched_industry) * 3
+        part = part.strip().lower()
+        if part in CORE_INDUSTRY and part not in core_matches:
+            core_matches.append(part)
+        elif part in ADJACENT_INDUSTRY and part not in adjacent_matches:
+            adjacent_matches.append(part)
 
-# 2. Seniority scoring from headline
-seniority_score = 0
-headline_lower = p_headline
-# Check highest tier first (VP/C-level: +4)
-vp_patterns = ["vp", "vice president", "ceo", "cfo", "coo", "chief", "c-level"]
-director_patterns = ["director"]
-manager_patterns = ["manager", "head of"]
+if not core_matches and not adjacent_matches:
+    original_lead["tier"] = "D"
+    original_lead["total_score"] = 0
+    original_lead["industry_score"] = 0
+    original_lead["status"] = "scanned"
+    original_lead["notes"] = "industry_gate_failed"
+    print(json.dumps(original_lead, ensure_ascii=False))
+    sys.exit(0)
 
-matched_vp = any(pat in headline_lower for pat in vp_patterns)
-matched_director = any(pat in headline_lower for pat in director_patterns)
-matched_manager = any(pat in headline_lower for pat in manager_patterns)
+industry_depth = min(len(core_matches) * 2 + len(adjacent_matches), 5)
 
-if matched_vp:
-    seniority_score = 4
-elif matched_director:
-    seniority_score = 3
-elif matched_manager:
-    seniority_score = 2
+# ---- Stage 3: Multi-Axis Scoring ----
 
-# 3. Travel keyword match: +2 per keyword found in about + experience
-travel_keywords = ["travel", "frequent flyer", "business travel", "出差", "差旅", "on the road"]
-travel_text = f"{p_about} {p_experience}"
-travel_matched = set()
-for kw in travel_keywords:
-    if kw in travel_text:
-        travel_matched.add(kw)
-# Also check pre-extracted travel_signals field
-if p_travel_signals:
-    for part in p_travel_signals.split(","):
-        part = part.strip()
-        if part and part in travel_keywords:
-            travel_matched.add(part)
-travel_score = len(travel_matched) * 2
+# Axis 1: Seniority (0-5)
+seniority = 0
+SENIORITY_MAP = [
+    (5, ["ceo", "cfo", "coo", "chief", "c-level", "president", "founder"]),
+    (4, ["vp", "vice president", "svp", "evp"]),
+    (3, ["director", "head of", "principal"]),
+    (2, ["senior manager", "sr. manager", "cluster"]),
+    (1, ["manager"]),
+]
+for score, patterns in SENIORITY_MAP:
+    if any(pat in p_headline for pat in patterns):
+        seniority = score
+        break
 
-# 4. 500+ connections: +1
-conn_bonus = 0
-conn_numeric = re.sub(r'[^0-9]', '', p_connections)
-if conn_numeric and int(conn_numeric) >= 500:
-    conn_bonus = 1
+# Axis 2: Company Brand Tier (0-5)
+COMPANY_TIERS = {
+    5: ["marriott", "hilton", "ihg", "accor", "hyatt", "wyndham",
+        "choice hotels", "best western", "radisson", "shangri-la"],
+    4: ["mandarin oriental", "four seasons", "ritz", "peninsula",
+        "fairmont", "kempinski", "rosewood", "aman"],
+    3: ["millennium", "melia", "nh hotel", "oyo", "tabist",
+        "minor hotels", "banyan tree", "pan pacific"],
+    2: ["louvre hotels", "jin jiang", "huazhu", "greenland",
+        "atour", "sunmei", "plateno"],
+    1: [],
+}
+company_text = f"{p_company} {p_headline} {p_experience}".lower()
+company_tier = 0
+for tier_score, brands in COMPANY_TIERS.items():
+    if any(brand in company_text for brand in brands):
+        company_tier = tier_score
+        break
+if company_tier == 0 and any(w in p_company.lower() for w in ["hotel", "resort", "hospitality"]):
+    company_tier = 1
 
-# 5. Recently active (post_count > 0): +1
-activity_bonus = 0
-pc_numeric = re.sub(r'[^0-9]', '', p_post_count)
-if pc_numeric and int(pc_numeric) > 0:
-    activity_bonus = 1
-
-# 6. Network proximity: +5 if 2nd degree via Tier-1 connection, +2 if any 2nd degree
+# Axis 3: Network Proximity (0-5)
 TIER1_CONNECTIONS = ["collin crick", "yafeng deng", "tina weeks weaver"]
 p_shared = str(profile_data.get("shared_connections", "")).lower()
-proximity_score = 0
+proximity = 0
 if any(name in p_shared for name in TIER1_CONNECTIONS):
-    proximity_score = 5
+    proximity = 5
 elif "2nd" in str(profile_data.get("connections", "")).lower():
-    proximity_score = 2
+    proximity = 2
 
-# 7. Story resonance: signals that this person is a "same world" peer
+# Axis 4: Activity & Reach (0-3)
+activity = 0
+conn_numeric = re.sub(r'[^0-9]', '', p_connections)
+if conn_numeric and int(conn_numeric) >= 500:
+    activity += 1
+if conn_numeric and int(conn_numeric) >= 1000:
+    activity += 1
+pc_numeric = re.sub(r'[^0-9]', '', p_post_count)
+if pc_numeric and int(pc_numeric) > 0:
+    activity += 1
+
+# Axis 5: Resonance (0-3)
 RESONANCE_MAP = {
-    "hospitality management": 3,
-    "usc": 2,
-    "uofsc": 2,
+    "hospitality management": 2,
+    "usc": 2, "uofsc": 2,
     "excel": 1,
     "manual reconciliation": 2,
+    "revenue management": 1,
 }
-resonance_raw = sum(v for k, v in RESONANCE_MAP.items() if k in all_text)
-resonance_score = min(resonance_raw, 3)
+resonance = min(sum(v for k, v in RESONANCE_MAP.items() if k in all_text), 3)
 
-total_score = industry_score + seniority_score + travel_score + conn_bonus + activity_bonus + proximity_score + resonance_score
+# ---- Composite Score ----
+authority = seniority * company_tier
+relevance = industry_depth
+reachability = proximity + activity + resonance
+total_score = authority + relevance * 2 + reachability
 
-# 8. Tier classification
-if resonance_score >= 3:
+# ---- Tier Classification ----
+if authority >= 12 and relevance >= 3:
     tier = "A"
-elif industry_score >= 4 and proximity_score >= 2:
+elif authority >= 6 or (relevance >= 4 and proximity >= 2):
     tier = "B"
-else:
+elif relevance >= 2:
     tier = "C"
+else:
+    tier = "D"
 
-# Update the lead
-original_lead["industry_score"] = industry_score
-original_lead["travel_score"] = travel_score
-original_lead["proximity_score"] = proximity_score
-original_lead["resonance_score"] = resonance_score
+# ---- Output ----
+original_lead["industry_score"] = industry_depth
+original_lead["seniority_score"] = seniority
+original_lead["company_tier"] = company_tier
+original_lead["proximity_score"] = proximity
+original_lead["activity_score"] = activity
+original_lead["resonance_score"] = resonance
+original_lead["authority"] = authority
+original_lead["relevance"] = relevance
 original_lead["tier"] = tier
 original_lead["total_score"] = total_score
 original_lead["company"] = p_company if p_company else original_lead.get("company", "")
 original_lead["status"] = "scanned"
-if total_score >= 10:
+if tier in ("A", "B"):
     original_lead["notes"] = "recommended"
 
-# Output as single JSON line
 print(json.dumps(original_lead, ensure_ascii=False))
 PYEOF
     )
