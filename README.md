@@ -12,150 +12,146 @@
 
 ---
 
-Every B2B team does LinkedIn outreach. Most do it by hand — copy-pasting names into messages, tabbing between spreadsheets and browser tabs, losing track of who was contacted two weeks ago. It is slow, inconsistent, and impossible to iterate on. Apollo.io solves part of this. Lemlist solves another part. Neither gives you a terminal, a scoring engine, or full control over the data.
+Every B2B team does LinkedIn outreach. Most do it by hand. Copy names into messages, tab between browser and spreadsheet, forget who got contacted last week. Apollo.io and Lemlist solve pieces of this. Neither gives you a terminal, a scoring engine, or full control over the data.
 
-linkedin-cli turns that into a pipeline. It is a full LinkedIn automation toolkit built on opencli YAML adapters and a Python/Bash prospect engine. Every stage — search, score, human review, connect, message — runs from a single script. The data stays on your machine. The logic is transparent and tunable.
+linkedin-cli turns that into a pipeline. 11 YAML adapters for every LinkedIn action. A Python/Bash scoring engine that classifies leads into tiers. A human review gate before anything goes out. The data stays local. The logic is yours to tune.
 
-The flow is: `Search → Score → Review → Connect → Message`. You define the target persona once. The pipeline finds candidates, scores them against a multi-axis classifier, surfaces the top tier for your review, and sends personalized outreach — with a dry-run gate before anything touches a real inbox.
+`Search → Score → Review → Connect → Message`
 
 ---
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/yourhandle/linkedin-cli && cd linkedin-cli && ./install.sh
+git clone https://github.com/Fearvox/linkedin-cli.git
+cd linkedin-cli
+./install.sh
 ```
 
 **Prerequisites:**
 
-1. [opencli](https://github.com/jackwener/opencli) v1.6.8+ installed and on your `$PATH`
-2. Chrome with the opencli Browser Bridge extension installed and active
-3. An active LinkedIn session in that Chrome profile
+1. [opencli](https://github.com/jackwener/opencli) v1.6.8+ on your `$PATH`
+2. Chrome with the opencli Browser Bridge extension loaded
+3. Signed into LinkedIn in that Chrome profile
 
 ---
 
 ## Commands
 
-All adapters run via `opencli linkedin <command>`. Write commands accept `--dry-run`.
+All adapters run via `opencli linkedin <command>`. Every write command supports `--dry-run`.
 
-| Command | Type | Description |
+| Command | Type | What it does |
 |---|---|---|
-| `profile <url>` | Read | Fetch a LinkedIn profile by URL |
-| `search-people <query>` | Read | Search LinkedIn people with filters |
-| `connections` | Read | List your connections with metadata |
-| `inbox` | Read | Read LinkedIn messages |
-| `notifications` | Read | Read LinkedIn notifications |
-| `post <text>` | Write | Create a LinkedIn post |
-| `like <url>` | Write | Like a post by URL |
-| `comment <url> --text "..."` | Write | Comment on a post |
+| `profile <url>` | Read | Fetch headline, about, experience, connections, company |
+| `search-people <query>` | Read | Keyword search with network degree filter |
+| `connections` | Read | List your 1st-degree connections |
+| `inbox` | Read | Recent conversations |
+| `notifications` | Read | Recent notifications |
+| `post <text>` | Write | Publish a text post |
+| `like <url>` | Write | Like a post |
+| `comment <url> --text "..."` | Write | Comment on a post (supports `--reply-to` for threads) |
 | `repost <url>` | Write | Repost with optional commentary |
-| `connect <url> --note "..."` | Write | Send a connection request with a note |
-| `send-dm <profile> --text "..."` | Write | Send a direct message to a connection |
+| `connect <url> --note "..."` | Write | Send connection request with personalized note |
+| `send-dm <profile> --text "..."` | Write | Direct message a connection |
 
 ---
 
 ## Prospect Pipeline
 
-The core of linkedin-cli. Four stages, one script.
-
-**Stage 1 — Search.** Pull candidate profiles for a target persona.
+Four stages, one script.
 
 ```bash
-./scripts/prospect.sh search "hotel revenue manager"
-```
+# 1. Search — pull candidates matching a target persona
+./scripts/prospect.sh search "hotel revenue manager" --limit 20
 
-Results land in `data/leads.jsonl`. Duplicate detection is built in.
-
-**Stage 2 — Score.** Run the scoring engine over every unscored lead.
-
-```bash
+# 2. Score — run the gated cascade over every unscored lead
 ./scripts/prospect.sh scan
-```
 
-Each lead gets a Tier A/B/C/D label and a structured score breakdown written back to the JSONL.
-
-**Stage 3 — Review.** Human-in-the-loop checkpoint.
-
-```bash
+# 3. Review — human-in-the-loop: approve, skip, or flag each lead
 ./scripts/prospect.sh review
-```
 
-Surfaces Tier A and B leads with score rationale. You approve, skip, or flag each one. No lead gets outreach without passing this gate.
-
-**Stage 4 — Outreach.** Send connection requests or DMs from approved leads.
-
-```bash
+# 4. Outreach — send connection requests from approved leads
 ./scripts/prospect.sh outreach --template templates/hco-intro.txt --dry-run
 ```
 
-Drop `--dry-run` when you are ready to send. The script logs every action and respects rate limits automatically.
+Leads persist in `data/leads.jsonl`. Dedup is built in. Drop `--dry-run` when ready to send.
 
 ---
 
 ## Scoring Engine
 
-The scoring engine is a three-stage gated cascade. A lead must pass each gate in sequence — failing early terminates scoring without wasting cycles on the later stages.
+Three-stage gated cascade. Fail any gate, get dropped.
 
-**Stage 1 — Quality Gate.** Six composite signals that filter noise before any semantic scoring runs:
+**Stage 1: Quality Gate** — 6 signals filter noise before semantic scoring:
 
-- Headline length below threshold (incomplete profiles)
-- ALL CAPS headline (low-signal accounts)
-- Job-seeker phrases ("open to work", "seeking opportunities")
-- Missing profile photo
-- Connection count below floor
-- Headline keyword density below minimum
+- Headline too short (<20 chars = incomplete profile)
+- ALL CAPS ratio >70% (job seekers, freelancers)
+- Job-seeker phrases ("looking for", "open to", "in transition")
+- No "at Company" or "|" pattern (low-info headline)
+- About section missing or thin
+- Experience section empty
 
-**Stage 2 — Industry Gate.** Keyword matching against a two-tier dictionary: core terms (direct match to target industry) and adjacent terms (related roles worth scoring). Leads with zero keyword hits are dropped.
+**Stage 2: Industry Gate** — must match at least one keyword:
 
-**Stage 3 — Multi-Axis Score.** Five dimensions, weighted and combined:
+- Core: `hotel`, `hospitality`, `ota`, `resort`, `lodging`
+- Adjacent: `cashback`, `reconciliation`, `revenue`, `booking`, `travel agency`
 
-- **Authority** — seniority level crossed with company tier (50+ hotel brands in the tier dictionary, expandable)
-- **Relevance** — keyword density and title alignment
-- **Proximity** — shared connections, schools, or geography
-- **Activity** — recent posting frequency and engagement signals
-- **Resonance** — content overlap with your defined target themes
+Zero matches = Tier D, skipped.
 
-Final score maps to Tier A (top 10%), B (next 20%), C (middle), or D (disqualified). Only A and B surface in the review stage.
+**Stage 3: Multi-Axis Score** — 5 dimensions:
+
+| Axis | Range | How it works |
+|------|-------|-------------|
+| Authority | 0-25 | `seniority(0-5) * company_tier(0-5)`. 50+ brands in the tier dict (Hilton=5, Millennium=3, generic=1) |
+| Relevance | 0-5 | Industry keyword depth (core matches count double) |
+| Proximity | 0-5 | Shared connections with your Tier-1 network |
+| Activity | 0-3 | Connection count 500+ and recent posts |
+| Resonance | 0-3 | Shared background signals (school, discipline, tools) |
+
+Tier classification uses the 2D space of (Authority, Relevance), not an additive total:
+
+- **A** — authority >= 12 AND relevance >= 3 (decision-maker at a major brand)
+- **B** — authority >= 6 OR strong relevance + network access
+- **C** — in the industry, low authority
+- **D** — failed a gate or low on all axes
 
 ---
 
 ## Message Templates
 
-Five templates with `{{variable}}` substitution. The pipeline injects first name, company, title, and a personalization hook pulled from their profile.
+5 templates with `{{variable}}` substitution (first_name, company, mutual_connection, topic):
 
-| Template | Use case |
+| Template | When to use |
 |---|---|
-| `tier-a-crossover.txt` | Shared background or overlapping career history |
-| `tier-b-product.txt` | Mutual connection intro with product context |
-| `tier-c-leverage.txt` | Lead engaged with your content |
-| `hco-intro.txt` | B2B product pitch to hospitality decision-makers |
-| `warm-reconnect.txt` | Re-engaging an existing but dormant connection |
+| `tier-a-crossover.txt` | Shared background (same school, same field) |
+| `tier-b-product.txt` | Mutual connection as intro context |
+| `tier-c-leverage.txt` | They engaged with your content |
+| `hco-intro.txt` | Cold B2B pitch to hotel operations decision-makers |
+| `warm-reconnect.txt` | Re-engage a dormant 1st-degree connection |
 
-Every template is plain text. Edit them without touching the pipeline code.
+Plain text files in `templates/`. Edit without touching pipeline code.
 
 ---
 
 ## Self-Evolution
 
-linkedin-cli is designed to improve from real outreach data. The `.algo-profile/` directory persists algorithmic decisions and changelog entries across sessions.
+`.algo-profile/` persists every non-trivial algorithmic decision across sessions.
 
-The scoring engine has already gone through two major iterations: from a flat additive 7-dimension model to the current gated cascade (which eliminated false positives from job-seeker accounts and incomplete profiles). The quality gate evolved from a single `len(headline) < 20` check to a 6-signal composite classifier after the first batch of scored leads surfaced systematic noise.
+The scoring engine has been through two major iterations. It started as a flat additive model (7 dimensions, sum to total, if >= 10 then recommended). Real outreach data showed the problem: 8 weak signals stacking to the same score as one strong signal. The current gated cascade was the fix. Quality gate evolved from a single `len(headline) < 20` check to a 6-signal composite after the first batch surfaced ALL CAPS job seekers and incomplete profiles passing through.
 
-All thresholds — quality gate cutoffs, tier dictionary contents, dimension weights — are defined in plain configuration. Feed your reply rates back in, adjust the weights, re-score the backlog.
+Company tier dictionary, keyword lists, tier thresholds — all tunable. Feed reply rates back in, adjust weights, re-score.
 
 ---
 
-## Safety and Ethics
+## Safety
 
-linkedin-cli is built for legitimate B2B outreach. It is not a spam tool.
+- 3-second delay between API calls, max 20 per batch
+- `--dry-run` required before any live write operation
+- Auth via browser session only — no passwords or tokens stored
+- Templates are professional, personalized, 3-7 lines each
+- Human review gate is mandatory — nothing sends without your approval
 
-- Rate limiting: 3 seconds between API calls, maximum 20 actions per batch
-- `--dry-run` gate required on all write operations before live execution
-- No credential storage: all auth runs through your existing browser session
-- Templates are personalized and relationship-oriented, not broadcast messages
-- Human review stage is mandatory — no automated outreach without approval
-
-LinkedIn's terms of service prohibit automated scraping and bulk messaging. Use this tool for targeted, high-signal outreach with genuine intent to start a professional relationship. Volume abuse defeats the purpose of the scoring engine and will get your account flagged.
+Use this for targeted outreach with real intent. Bulk abuse will get your account flagged and defeats the scoring engine's purpose.
 
 ---
 
@@ -163,13 +159,32 @@ LinkedIn's terms of service prohibit automated scraping and bulk messaging. Use 
 
 ```
 linkedin-cli/
-├── adapters/           # 11 YAML adapters (opencli interface)
-├── scripts/            # prospect.sh pipeline (~1300 lines)
-├── templates/          # 5 message templates
-├── .algo-profile/      # Algorithm decision archive
-├── data/               # leads.jsonl (gitignored)
-├── tests/              # Smoke tests
-├── install.sh          # Symlink installer
+├── adapters/               # 11 YAML adapters (opencli format)
+│   ├── profile.yaml        # Read: full profile scrape
+│   ├── search-people.yaml  # Read: Voyager API + DOM fallback
+│   ├── connections.yaml    # Read: 1st-degree list
+│   ├── inbox.yaml          # Read: conversations
+│   ├── notifications.yaml  # Read: notification feed
+│   ├── post.yaml           # Write: create post
+│   ├── like.yaml           # Write: like post
+│   ├── comment.yaml        # Write: comment (+ thread replies)
+│   ├── repost.yaml         # Write: repost
+│   ├── connect.yaml        # Write: connection request
+│   └── send-dm.yaml        # Write: direct message
+├── scripts/
+│   └── prospect.sh         # Pipeline orchestrator (~1300 lines)
+├── templates/
+│   ├── connect/             # Tier-specific connection notes
+│   ├── hco-intro.txt        # B2B cold pitch
+│   └── warm-reconnect.txt   # Existing connection re-engage
+├── .algo-profile/           # Persistent algorithm decisions
+├── data/                    # leads.jsonl (gitignored)
+├── tests/
+│   └── test-all.sh          # Smoke tests
+├── docs/reports/            # Generated benchmark reports
+├── install.sh               # Symlink adapters to ~/.opencli/
+├── CONTRIBUTING.md
+├── LICENSE
 └── README.md
 ```
 
@@ -177,15 +192,14 @@ linkedin-cli/
 
 ## Contributing
 
-Issues and PRs are open. The highest-value contributions are:
+See [CONTRIBUTING.md](CONTRIBUTING.md). Highest-value contributions:
 
-- New industry tier dictionaries (currently optimized for hospitality)
-- Additional scoring dimensions with documented methodology
-- New adapter commands
-- Replay-based test cases built from anonymized lead fixtures
+- Industry tier dictionaries beyond hospitality
+- New scoring dimensions with documented methodology
+- New adapter commands for LinkedIn actions we don't cover yet
 
 ---
 
 ## License
 
-MIT. See `LICENSE`.
+MIT. See [LICENSE](LICENSE).

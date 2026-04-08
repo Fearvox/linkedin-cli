@@ -4,66 +4,55 @@
 
 # linkedin-cli
 
-**LinkedIn 全自动外联流水线——搜索、评分、触达，端到端。**
+**LinkedIn 全自动外联流水线 — 搜索、评分、触达，端到端。**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Playwright](https://img.shields.io/badge/browser-Playwright-green.svg)](https://playwright.dev/)
-[![Shell](https://img.shields.io/badge/shell-bash-lightgrey.svg)](https://www.gnu.org/software/bash/)
+![opencli](https://img.shields.io/badge/opencli-v1.6.8+-blue) ![Playwright](https://img.shields.io/badge/Playwright-Browser%20Automation-2ea44f) ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white) ![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?logo=gnubash&logoColor=white) ![Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-7C3AED) ![License](https://img.shields.io/badge/License-MIT-brightgreen)
 
 </div>
 
 ---
 
-## 问题从这里开始
+每个 B2B 团队都在做 LinkedIn 外联。多数人手动操作 — 一个个看 profile，一条条发消息，在标签页和表格之间来回切换，忘了上周联系过谁。
 
-每个 B2B 团队都在做 LinkedIn 外联。多数人手动操作——一个一个看 profile，一条一条发消息，在一堆标签页里复制粘贴，希望自己没漏掉重要的人。
+linkedin-cli 把这件事变成了流水线。11 个 YAML adapter 覆盖 LinkedIn 所有读写操作。一套 Python/Bash 评分引擎把候选人分成 A/B/C/D 四档。人工 review 卡在发送前。数据留在本地，逻辑你随时能调。
 
-这不是策略，这是体力活。
-
-linkedin-cli 把这件事变成了流水线。从关键词搜索，到 profile 评分，到人工 review，到精准发出连接请求和私信——每一步都是命令行，每一步都可审计，每一步都不需要你盯着屏幕点鼠标。
-
-这不是群发工具。这是一套猎人系统。
+`搜索 → 评分 → 审核 → 触达`
 
 ---
 
 ## 快速开始
 
 ```bash
-# 克隆
-git clone https://github.com/yourname/linkedin-cli.git
+git clone https://github.com/Fearvox/linkedin-cli.git
 cd linkedin-cli
-
-# 安装依赖
-pip install playwright pyyaml
-playwright install chromium
-
-# 配置浏览器 session（一次性）
-# 用已登录的 LinkedIn 浏览器 session，无需账号密码
-cp .env.example .env
+./install.sh
 ```
+
+**前置条件：**
+
+1. [opencli](https://github.com/jackwener/opencli) v1.6.8+ 已安装
+2. Chrome 加载了 opencli Browser Bridge 扩展
+3. Chrome 里已登录 LinkedIn
 
 ---
 
 ## 11 个 Adapter
 
-11 个 adapter，覆盖 LinkedIn 所有读写操作。搜索是猎物入口，评分是筛选机制，外联是精确打击。
+所有命令通过 `opencli linkedin <command>` 调用。Write 操作均支持 `--dry-run`。
 
 | 命令 | 类型 | 功能 |
 |------|------|------|
-| `profile` | Read | 抓取指定用户的完整 profile |
-| `search-people` | Read | 关键词 + 过滤条件搜索目标人群 |
-| `connections` | Read | 导出一度连接列表 |
-| `inbox` | Read | 读取私信列表 |
-| `notifications` | Read | 读取通知流 |
-| `post` | Write | 发布内容 |
-| `like` | Write | 点赞指定帖子 |
-| `comment` | Write | 在帖子下评论 |
-| `repost` | Write | 转发帖子 |
-| `connect` | Write | 发送连接请求（含 note） |
-| `send-dm` | Write | 发送私信 |
-
-所有 Write 操作均支持 `--dry-run`，先看再打。
+| `profile <url>` | Read | 抓取完整 profile（headline、about、experience、connections） |
+| `search-people <query>` | Read | 关键词搜索 + 网络度过滤 |
+| `connections` | Read | 导出一度连接 |
+| `inbox` | Read | 读取私信 |
+| `notifications` | Read | 读取通知 |
+| `post <text>` | Write | 发帖 |
+| `like <url>` | Write | 点赞 |
+| `comment <url> --text "..."` | Write | 评论（支持 `--reply-to` 回复楼中楼） |
+| `repost <url>` | Write | 转发 |
+| `connect <url> --note "..."` | Write | 发送连接请求 + 附言 |
+| `send-dm <profile> --text "..."` | Write | 私信 |
 
 ---
 
@@ -72,80 +61,97 @@ cp .env.example .env
 四个阶段，一条命令链。
 
 ```bash
-# Stage 1 — 搜索：把目标人群抓进本地
-bash prospect.sh search --query "revenue manager hotel" --limit 100
+# 1. 搜索 — 按目标画像抓取候选人
+./scripts/prospect.sh search "hotel revenue manager" --limit 20
 
-# Stage 2 — 评分：跑评分引擎，过滤噪音
-bash prospect.sh scan
+# 2. 评分 — 对未评分 lead 跑门控级联
+./scripts/prospect.sh scan
 
-# Stage 3 — Review：人工确认，标记 approve/skip
-bash prospect.sh review
+# 3. 审核 — 人工逐条确认 approve / skip
+./scripts/prospect.sh review
 
-# Stage 4 — 外联：对 approved 名单精准触达
-bash prospect.sh outreach --template tier-a-crossover
+# 4. 触达 — 向已批准名单发连接请求
+./scripts/prospect.sh outreach --template templates/hco-intro.txt --dry-run
 ```
 
-数据落在本地 JSONL 文件，每一步的决策都可以追溯。
+数据存在 `data/leads.jsonl`，自动去重。去掉 `--dry-run` 正式发送。
 
 ---
 
 ## 评分引擎：三级门控级联
 
-不是简单加分，是有门控的级联筛选。只有通过前一级，才会进入下一级评估。
+不是简单加分。逐级过关，挂在任何一级直接淘汰。
 
-**第一级：Quality Gate（6 信号复合）**
+**第一级：Quality Gate** — 6 个信号过滤噪音：
 
-headline 长度、ALL CAPS 占比、求职关键词（"open to work"类）、"at Company" 模板化模式、about 段落存在与否、工作经历完整度。质量不达标，直接淘汰，不浪费后续计算。
+- headline 太短（<20 字符 = 不完整 profile）
+- ALL CAPS 占比 >70%（求职者、freelancer）
+- 求职关键词（"looking for"、"open to"、"in transition"）
+- 无 "at Company" 或 "|" 模式（低信息量 headline）
+- about 缺失或过短
+- experience 为空
 
-**第二级：Industry Gate**
+**第二级：Industry Gate** — 至少匹配一个关键词：
 
-核心行业：hotel / hospitality / OTA / resort / lodging。相邻行业：cashback / reconciliation / revenue / booking。不在目标行业，跳过。
+- 核心：`hotel`、`hospitality`、`ota`、`resort`、`lodging`
+- 相邻：`cashback`、`reconciliation`、`revenue`、`booking`、`travel agency`
 
-**第三级：多维评分**
+零匹配 = Tier D，跳过。
 
-- Seniority（0-5）× Company Tier（0-5）= Authority（0-25）
-- + Relevance（行业吻合度）
-- + Proximity（网络距离）
-- + Activity（近期活跃度）
-- + Resonance（内容互动信号）
+**第三级：多维评分** — 5 个轴：
 
-最终输出 Tier A / B / C / D，对应不同外联策略。
+| 轴 | 范围 | 算法 |
+|----|------|------|
+| Authority | 0-25 | `seniority(0-5) * company_tier(0-5)`，50+ 品牌分级（Hilton=5, Millennium=3, 不知名=1） |
+| Relevance | 0-5 | 行业关键词深度（核心匹配 ×2） |
+| Proximity | 0-5 | 与你 Tier-1 人脉的共同连接 |
+| Activity | 0-3 | connections 500+ 且近期有发帖 |
+| Resonance | 0-3 | 共同背景信号（学校、专业、工具） |
+
+Tier 分类用 (Authority, Relevance) 二维空间，不是加法总分：
+
+- **A** — authority >= 12 且 relevance >= 3（大品牌决策者）
+- **B** — authority >= 6 或 强行业 + 网络可达
+- **C** — 在目标行业，authority 低
+- **D** — 未过门控或各轴都弱
 
 ---
 
 ## 消息模板
 
-5 套模板，按 Tier 对应，`{{variable}}` 变量替换。
+5 套模板，`{{variable}}` 替换（first_name、company、mutual_connection、topic）：
 
 | 模板 | 适用场景 |
 |------|----------|
-| `tier-a-crossover` | 共同背景切入，高意图目标 |
-| `tier-b-product` | 借助共同连接，产品价值导向 |
-| `tier-c-leverage` | 基于对方内容互动，低门槛建联 |
-| `hco-intro` | B2B 直接 pitch，酒店渠道决策人 |
-| `warm-reconnect` | 已有连接，重新激活对话 |
+| `tier-a-crossover.txt` | 共同背景切入（同校、同行） |
+| `tier-b-product.txt` | 共同连接做引子 |
+| `tier-c-leverage.txt` | 对方与你内容有互动 |
+| `hco-intro.txt` | B2B 冷启动 pitch（酒店运营决策人） |
+| `warm-reconnect.txt` | 重新激活已有一度连接 |
 
-模板文件在 `templates/`，可以直接改，pipeline 会自动读取。
+纯文本文件，在 `templates/` 下直接改，不用碰 pipeline 代码。
 
 ---
 
-## 自进化：.algo-profile/
+## 自进化
 
-系统把所有评分决策持久化在 `.algo-profile/` 目录。评分逻辑不是一次性写死的——它记录了每次迭代的原因。
+`.algo-profile/` 目录持久化每个非平凡的算法决策。
 
-评分引擎自身的演进路径：从最初的线性加法，到引入 Quality Gate，再到 Quality Gate 从单一 `len<20` 扩展为 6 信号复合。每次改动都有对应的记录。
+评分引擎经历了两次大迭代。最初是 7 维加法模型（各维度分数相加，>=10 推荐）。实际跑了一批数据后发现问题：8 个弱信号堆到和 1 个强信号一样的分数。当前门控级联就是修复方案。Quality Gate 从最初的 `len(headline) < 20` 单一检查，演化到 6 信号复合分类器 — 因为第一批评分结果暴露了 ALL CAPS 求职者和不完整 profile 大量通过。
 
-这让调优有据可查，下次换目标行业时，不是从零开始。
+品牌分级字典、关键词列表、门控阈值 — 都可调。把回复率喂回来，调整权重，重新跑分。
 
 ---
 
 ## 安全机制
 
-- 操作间隔固定 3 秒，不触发 LinkedIn 速率限制
-- 每批最多 20 条，不做大规模轰炸
-- 所有 Write 操作支持 `--dry-run`，确认后再执行
-- 使用浏览器 session 鉴权，不存储账号密码
-- 模板经过人工审核，专业语气，不群发垃圾内容
+- API 调用间隔 3 秒，每批最多 20 条
+- 所有 Write 操作必须先 `--dry-run`
+- 认证走浏览器 session，不存密码或 token
+- 模板经人工审核，专业语气，3-7 行
+- 人工审核是强制门控 — 没有你点头，什么都不会发出去
+
+用于有真实意图的精准触达。大量群发会触发 LinkedIn 风控，也完全违背评分引擎的设计初衷。
 
 ---
 
@@ -153,29 +159,32 @@ headline 长度、ALL CAPS 占比、求职关键词（"open to work"类）、"at
 
 ```
 linkedin-cli/
-├── adapters/               # 11 个 YAML adapter
-│   ├── profile.yaml
-│   ├── search-people.yaml
-│   ├── connections.yaml
-│   ├── inbox.yaml
-│   ├── notifications.yaml
-│   ├── post.yaml
-│   ├── like.yaml
-│   ├── comment.yaml
-│   ├── repost.yaml
-│   ├── connect.yaml
-│   └── send-dm.yaml
-├── prospect.sh             # Pipeline 入口
-├── score.py                # 评分引擎
-├── templates/              # 消息模板
-│   ├── tier-a-crossover.txt
-│   ├── tier-b-product.txt
-│   ├── tier-c-leverage.txt
-│   ├── hco-intro.txt
-│   └── warm-reconnect.txt
-├── .algo-profile/          # 评分决策持久化
-├── data/                   # 本地数据（JSONL）
-├── .env.example
+├── adapters/               # 11 个 YAML adapter（opencli 格式）
+│   ├── profile.yaml        # Read: profile 全量抓取
+│   ├── search-people.yaml  # Read: Voyager API + DOM fallback
+│   ├── connections.yaml    # Read: 一度连接
+│   ├── inbox.yaml          # Read: 私信
+│   ├── notifications.yaml  # Read: 通知
+│   ├── post.yaml           # Write: 发帖
+│   ├── like.yaml           # Write: 点赞
+│   ├── comment.yaml        # Write: 评论（支持楼中楼）
+│   ├── repost.yaml         # Write: 转发
+│   ├── connect.yaml        # Write: 连接请求
+│   └── send-dm.yaml        # Write: 私信
+├── scripts/
+│   └── prospect.sh         # Pipeline 主脚本（~1300 行）
+├── templates/
+│   ├── connect/             # Tier 分级连接附言
+│   ├── hco-intro.txt        # B2B 冷启动 pitch
+│   └── warm-reconnect.txt   # 已有连接重激活
+├── .algo-profile/           # 算法决策持久化
+├── data/                    # leads.jsonl（已 gitignore）
+├── tests/
+│   └── test-all.sh          # 冒烟测试
+├── docs/reports/            # 生成的 benchmark 报告
+├── install.sh               # adapter 软链安装器
+├── CONTRIBUTING.md
+├── LICENSE
 └── README.md
 ```
 
@@ -183,10 +192,14 @@ linkedin-cli/
 
 ## Contributing
 
-欢迎提交新 adapter、改进评分逻辑、或者增加新的消息模板。提 PR 前跑一下现有的 adapter 确认没有 regression。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。最有价值的贡献：
+
+- 酒店业以外的行业分级字典
+- 新评分维度 + 方法论文档
+- 新 adapter（LinkedIn 我们还没覆盖的操作）
 
 ---
 
 ## License
 
-MIT
+MIT. 见 [LICENSE](LICENSE).
