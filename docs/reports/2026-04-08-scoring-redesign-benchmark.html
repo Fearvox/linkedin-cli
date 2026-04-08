@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scoring Redesign Benchmark — linkedin-cli</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text-dim: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --blue: #58a6ff;
+    --purple: #bc8cff;
+    --cyan: #39d353;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    padding: 24px;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #f0f6fc;
+    margin-bottom: 4px;
+  }
+  .subtitle { color: var(--text-dim); font-size: 12px; margin-bottom: 24px; }
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .panel-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .bar-row {
+    display: flex;
+    align-items: center;
+    margin-bottom: 4px;
+    font-size: 12px;
+  }
+  .bar-label {
+    width: 60px;
+    text-align: right;
+    margin-right: 10px;
+    color: var(--text-dim);
+  }
+  .bar-track {
+    flex: 1;
+    height: 18px;
+    background: #21262d;
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.6s ease;
+  }
+  .bar-value {
+    width: 30px;
+    text-align: right;
+    margin-left: 8px;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .bar-fill.old { background: #484f58; }
+  .bar-fill.new-b { background: var(--green); }
+  .bar-fill.new-c { background: var(--blue); }
+  .bar-fill.new-d { background: var(--yellow); }
+  .legend {
+    display: flex;
+    gap: 16px;
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 5px 8px;
+    border-bottom: 1px solid #21262d;
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  .tier { font-weight: 700; font-size: 13px; }
+  .tier-b { color: var(--green); }
+  .tier-c { color: var(--blue); }
+  .tier-d { color: var(--text-dim); }
+  .up { color: var(--green); }
+  .down { color: var(--text-dim); }
+  .warn { color: var(--yellow); }
+  .caps { color: var(--red); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-green { background: #1a3a2a; color: var(--green); }
+  .badge-yellow { background: #3a2f1a; color: var(--yellow); }
+  .badge-red { background: #3a1a1a; color: var(--red); }
+  .badge-blue { background: #1a2a3a; color: var(--blue); }
+  .badge-dim { background: #21262d; color: var(--text-dim); }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .stat-card {
+    background: #21262d;
+    border-radius: 6px;
+    padding: 12px;
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 4px;
+  }
+  .fn-card {
+    background: #21262d;
+    border-left: 3px solid var(--yellow);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    border-radius: 0 6px 6px 0;
+    font-size: 12px;
+  }
+  .fn-name { font-weight: 600; color: var(--yellow); margin-bottom: 4px; }
+  .fn-detail { color: var(--text-dim); }
+  .fn-fix { color: var(--green); margin-top: 4px; }
+  .algo-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px 0;
+    border-bottom: 1px solid #21262d;
+    font-size: 12px;
+  }
+  .algo-row:last-child { border-bottom: none; }
+  .algo-name { font-weight: 600; color: var(--purple); }
+  .algo-complexity { color: var(--cyan); }
+  .kv-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #21262d;
+    font-size: 12px;
+  }
+  .kv-row:last-child { border-bottom: none; }
+  .kv-label { color: var(--text-dim); font-weight: 600; }
+  .kv-value { color: var(--text); text-align: right; }
+  .footer {
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 10px;
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+
+<h1>Scoring Redesign Benchmark</h1>
+<div class="subtitle">linkedin-cli &middot; 2026-04-08 &middot; Gated Cascade + Authority Model vs Additive 7-dim &middot; n=15 leads</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--green)">4</div>
+    <div class="stat-label">Tier Levels</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--green)">3</div>
+    <div class="stat-label">Promoted to B</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--yellow)">7</div>
+    <div class="stat-label">Filtered to D</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" style="color:var(--yellow)">2</div>
+    <div class="stat-label">False Negatives</div>
+  </div>
+</div>
+
+<!-- Panel 1: Tier Distribution -->
+<div class="panel">
+  <div class="panel-title">Panel 1 &mdash; Tier Distribution Shift</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div>
+      <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;font-weight:600">OLD &mdash; Additive (0% discrimination)</div>
+      <div class="bar-row"><span class="bar-label">A</span><div class="bar-track"><div class="bar-fill old" style="width:0%"></div></div><span class="bar-value">0</span></div>
+      <div class="bar-row"><span class="bar-label">B</span><div class="bar-track"><div class="bar-fill old" style="width:0%"></div></div><span class="bar-value">0</span></div>
+      <div class="bar-row"><span class="bar-label">C</span><div class="bar-track"><div class="bar-fill old" style="width:100%"></div></div><span class="bar-value" style="color:var(--text)">15</span></div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--green);margin-bottom:8px;font-weight:600">NEW &mdash; Gated Cascade (4-tier)</div>
+      <div class="bar-row"><span class="bar-label">A</span><div class="bar-track"><div class="bar-fill new-b" style="width:0%"></div></div><span class="bar-value">0</span></div>
+      <div class="bar-row"><span class="bar-label">B</span><div class="bar-track"><div class="bar-fill new-b" style="width:20%"></div></div><span class="bar-value" style="color:var(--green)">3</span></div>
+      <div class="bar-row"><span class="bar-label">C</span><div class="bar-track"><div class="bar-fill new-c" style="width:33%"></div></div><span class="bar-value" style="color:var(--blue)">5</span></div>
+      <div class="bar-row"><span class="bar-label">D</span><div class="bar-track"><div class="bar-fill new-d" style="width:47%"></div></div><span class="bar-value" style="color:var(--yellow)">7</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 2: Per-Lead Table -->
+<div class="panel">
+  <div class="panel-title">Panel 2 &mdash; Per-Lead Scoring Comparison</div>
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Headline</th><th>Old</th><th>New</th><th>Auth</th><th>Rel</th><th>Gate</th><th></th></tr>
+    </thead>
+    <tbody>
+      <tr><td>MANUEL Calvo</td><td style="color:var(--text-dim)">Revenue Manager</td><td>C/5</td><td class="tier tier-d">D/0</td><td>0</td><td>0</td><td>quality</td><td class="down">&darr;</td></tr>
+      <tr><td>Larissa Cruz</td><td style="color:var(--text-dim)">Revenue Manager | Hotel Unique</td><td>C/8</td><td class="tier tier-c">C/7</td><td>1</td><td>3</td><td>pass</td><td></td></tr>
+      <tr><td>Akhil Nazareth</td><td style="color:var(--text-dim)">Revenue Manager</td><td>C/5</td><td class="tier tier-d">D/0</td><td>0</td><td>0</td><td>quality</td><td class="down">&darr;</td></tr>
+      <tr style="background:#1a3a2a"><td class="up">&uarr; Hossam Mohamed</td><td>RM at Amarina Hotels &amp; Resorts</td><td>C/8</td><td class="tier tier-b">B/11</td><td>1</td><td>5</td><td class="up">pass</td><td class="up">&uarr;</td></tr>
+      <tr style="background:#1a3a2a"><td class="up">&uarr; Tushar Kalra</td><td>RM - Millennium Hotels &amp; Resorts</td><td>C/8</td><td class="tier tier-b">B/15</td><td>5</td><td>5</td><td class="up">pass</td><td class="up">&uarr;</td></tr>
+      <tr style="background:#1a3a2a"><td class="up">&uarr; Omar El Hajjar</td><td>Cluster RM at Radisson Hotel Group</td><td>C/8</td><td class="tier tier-b">B/16</td><td style="color:var(--green);font-weight:700">10</td><td>3</td><td class="up">pass</td><td class="up">&uarr;</td></tr>
+      <tr><td>Andrea Uliani</td><td style="color:var(--text-dim)">RM at ATRIO HOTEL MANAGEMENT</td><td>C/8</td><td class="tier tier-c">C/7</td><td>1</td><td>3</td><td>pass</td><td></td></tr>
+      <tr style="background:#3a1a1a"><td class="caps">&darr; Alok Chimbalkar</td><td class="caps">REVENUE MANAGEMENT PROFESSIONAL</td><td>C/3</td><td class="tier tier-d">D/0</td><td>0</td><td>0</td><td class="caps">quality</td><td class="caps">CAPS</td></tr>
+      <tr><td>Aun Haider</td><td style="color:var(--text-dim)">RM at Kaya Great Northern Hotel</td><td>C/8</td><td class="tier tier-c">C/7</td><td>1</td><td>3</td><td>pass</td><td></td></tr>
+      <tr style="background:#3a2f1a"><td class="warn">&#9888; Zeynep Kardes</td><td class="warn">Revenue Manager at Hilton RMCC</td><td>C/5</td><td class="tier tier-d">D/7</td><td>5</td><td class="warn">1</td><td class="warn">pass*</td><td class="warn">FN</td></tr>
+      <tr style="background:#3a2f1a"><td class="warn">&#9888; Taryn Porteous</td><td class="warn">Sr OTA Ops Mgr Mandarin Oriental</td><td>C/5</td><td class="tier tier-d">D/0</td><td>0</td><td class="warn">0</td><td class="warn">quality*</td><td class="warn">FN</td></tr>
+      <tr><td>Mohini Rohilla</td><td style="color:var(--text-dim)">OTA Manager</td><td>C/5</td><td class="tier tier-d">D/0</td><td>0</td><td>0</td><td>quality</td><td class="down">&darr; 11ch</td></tr>
+      <tr><td>Johanna LOTTE</td><td style="color:var(--text-dim)">Ops Manager / Global Ops</td><td>C/2</td><td class="tier tier-d">D/0</td><td>0</td><td>0</td><td>quality</td><td class="down">&darr;</td></tr>
+      <tr><td>Yue Xian</td><td style="color:var(--text-dim)">Tabist/OYO - OTA Ops Manager</td><td>C/5</td><td class="tier tier-c">C/7</td><td>3</td><td>2</td><td>pass</td><td></td></tr>
+      <tr><td>Abdelmonsif Fadl</td><td style="color:var(--text-dim)">Reservations Mgr | OTA/Extranet</td><td>C/5</td><td class="tier tier-c">C/4</td><td>0</td><td>2</td><td>pass</td><td></td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:10px;display:flex;gap:10px">
+    <span class="badge badge-green">3 promoted</span>
+    <span class="badge badge-blue">5 stable</span>
+    <span class="badge badge-dim">7 filtered</span>
+    <span class="badge badge-yellow">2 false neg</span>
+  </div>
+</div>
+
+<!-- Panel 3: False Negatives -->
+<div class="panel">
+  <div class="panel-title">Panel 3 &mdash; False Negative Analysis</div>
+  <div style="margin-bottom:10px"><span class="badge badge-yellow">Self-correct after full profile scan</span></div>
+  <div class="fn-card">
+    <div class="fn-name">&#9888; Zeynep Kardes &mdash; Revenue Manager at Hilton RMCC</div>
+    <div class="fn-detail"><strong>Issue:</strong> 'Hilton' is a brand name (company_tier=5), but not in CORE_INDUSTRY keyword list. Only 'revenue' matched as adjacent &rarr; relevance=1 &rarr; Tier D.</div>
+    <div class="fn-fix"><strong>After scan:</strong> about/experience will contain 'hotel' &rarr; relevance bumps to &ge;3 &rarr; Tier C minimum. authority=5 already correct (Manager &times; Hilton = 1&times;5).</div>
+  </div>
+  <div class="fn-card">
+    <div class="fn-name">&#9888; Taryn Porteous &mdash; Senior OTA Operations Manager Mandarin Oriental</div>
+    <div class="fn-detail"><strong>Issue:</strong> Headline lacks ' at ' or '|' separator &rarr; quality_signals=1 (&lt;2 threshold). No about/experience available at search phase.</div>
+    <div class="fn-fix"><strong>After scan:</strong> p_about (&gt;50ch) + p_experience (&gt;30ch) add +2 quality signals &rarr; quality&ge;3 &rarr; passes gate. Expected: Tier B (authority = Sr.Manager(2) &times; MO(4) = 8).</div>
+  </div>
+</div>
+
+<!-- Panel 4: Algorithm Profile -->
+<div class="panel">
+  <div class="panel-title">Panel 4 &mdash; Algorithm Profile</div>
+  <div class="algo-row">
+    <div>
+      <span class="algo-name">Gated Cascade Filter</span>
+      <div style="color:var(--text-dim);font-size:11px;margin-top:2px">3-stage: quality gate &rarr; industry gate &rarr; multi-axis scoring</div>
+    </div>
+    <div class="algo-complexity">O(n) / O(k)</div>
+  </div>
+  <div class="algo-row">
+    <div>
+      <span class="algo-name">Multiplicative Interaction Term</span>
+      <div style="color:var(--text-dim);font-size:11px;margin-top:2px">authority = seniority &times; company_tier (0-25 range)</div>
+    </div>
+    <div class="algo-complexity">O(1) / O(1)</div>
+  </div>
+</div>
+
+<!-- Panel 5: Summary -->
+<div class="panel">
+  <div class="panel-title">Summary</div>
+  <div class="kv-row"><span class="kv-label">Discrimination</span><span class="kv-value">0% &rarr; 4-tier separation (A/B/C/D)</span></div>
+  <div class="kv-row"><span class="kv-label">Noise Filtered</span><span class="kv-value">7/15 (47%) correctly gated to Tier D</span></div>
+  <div class="kv-row"><span class="kv-label">Top Promoted</span><span class="kv-value">Omar (Radisson, auth=10) &gt; Tushar (Millennium, 5) &gt; Hossam (Amarina, 1)</span></div>
+  <div class="kv-row"><span class="kv-label">Quality Gate</span><span class="kv-value">ALL CAPS + short headline + job-seeker &rarr; 5 correct blocks</span></div>
+  <div class="kv-row"><span class="kv-label">Next Action</span><span class="kv-value" style="color:var(--green)">Run prospect.sh scan &rarr; FN self-correction via profile enrichment</span></div>
+</div>
+
+<div class="footer">
+  Generated by data-algo-viz &middot; linkedin-cli &middot; 2026-04-08
+</div>
+
+</body>
+</html>

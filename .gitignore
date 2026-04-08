@@ -1,1 +1,13 @@
+# Sensitive data
 data/leads.jsonl
+data/leads.jsonl.bak
+.env
+*.credentials
+
+# OS / editor
+.DS_Store
+.gstack/
+.playwright-mcp/
+
+# Reports (generated artifacts)
+docs/reports/*.png
