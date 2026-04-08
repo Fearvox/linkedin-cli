@@ -183,20 +183,21 @@ pipeline:
             const card = a.closest('[data-display-contents]');
             if (!card) continue;
 
-            const lines = card.innerText
-              .split('\n')
-              .map(l => l.trim())
-              .filter(l => l && !l.match(/^(Connect|Message|Follow|\d+|•)/));
+            const allLines = card.innerText.split('\n').map(l => l.trim()).filter(Boolean);
+            const lines = allLines.filter(l => !l.match(/^(Connect|Message|Follow|\d+|•)/));
 
             const name = (lines[0] || '').replace(/\s*•\s*\d+(st|nd|rd|th)\+?/, '').trim();
-            const headline = lines.find((l, i) => i > 0 && !l.includes('•') && l.length > 2) || '';
+            const headline = lines.find((l, i) => i > 0 && !l.includes('•') && !l.startsWith('Connected') && l.length > 2) || '';
+            // "Connected on April 8, 2026" → extract date
+            const connectedLine = allLines.find(l => l.startsWith('Connected on'));
+            const connected_at = connectedLine ? connectedLine.replace('Connected on ', '') : '';
 
             if (!name) continue;
             results.push({
               name,
               vanity,
               headline,
-              connected_at: '',
+              connected_at,
               profile_url: 'https://www.linkedin.com/in/' + vanity,
             });
           }
