@@ -18,8 +18,8 @@ args:
 columns: [rank, name, vanity, headline, connected_at, profile_url]
 
 pipeline:
-  - navigate: "https://www.linkedin.com/feed/"
-  - wait: 2
+  - navigate: "https://www.linkedin.com/mynetwork/invite-connect/connections/"
+  - wait: 4
   - evaluate: |
       (async () => {
         const limit = ${{ args.limit | json }};
@@ -160,14 +160,17 @@ pipeline:
           // Voyager API failed; fall through to DOM fallback
         }
 
-        // --- DOM scrape fallback ---
+        // --- DOM scrape fallback (already on connections page) ---
         if (results.length === 0) {
-          const connUrl = 'https://www.linkedin.com/mynetwork/invite-connect/connections/'
-            + (query ? '?keywords=' + encodeURIComponent(query) : '');
-          window.location.href = connUrl;
-
-          // Wait for page to render
-          await new Promise(r => setTimeout(r, 4000));
+          // If query specified, use search filter via URL params already in page
+          if (query) {
+            const searchInput = document.querySelector('input[placeholder*="Search"]') || document.querySelector('#mn-connections-search-input');
+            if (searchInput) {
+              searchInput.value = query;
+              searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+              await new Promise(r => setTimeout(r, 2000));
+            }
+          }
 
           // Scroll to load more connections
           const scrollAttempts = Math.ceil(limit / 10);
