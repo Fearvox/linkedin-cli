@@ -15,6 +15,10 @@ args:
     type: string
     required: true
     description: "Comment text"
+  reply-to:
+    type: string
+    default: ""
+    description: "Reply under a specific commenter's comment (partial name match, e.g. 'Tina')"
   dry-run:
     type: bool
     default: false
@@ -31,12 +35,27 @@ pipeline:
         const commentText = ${{ args.text | json }};
         const dryRun = ${{ args['dry-run'] | json }};
 
+        const replyTo = ${{ args['reply-to'] | json }};
+
         if (dryRun) {
-          return [{ status: 'DRY_RUN', post_url: postUrl, comment_preview: commentText.slice(0, 200) }];
+          return [{ status: 'DRY_RUN', post_url: postUrl, comment_preview: (replyTo ? '[reply to ' + replyTo + '] ' : '') + commentText.slice(0, 200) }];
         }
 
         // --- DOM interaction (Voyager comment API returns 400 post-2025 redesign) ---
-        const editor = document.querySelector('div.ql-editor[contenteditable="true"]');
+
+        // If reply-to specified, click the matching Reply button first
+        if (replyTo) {
+          const replyBtn = [...document.querySelectorAll('button[aria-label*="Reply to"]')]
+            .find(b => b.getAttribute('aria-label').toLowerCase().includes(replyTo.toLowerCase()));
+          if (!replyBtn) throw new Error('Reply button not found for: ' + replyTo);
+          replyBtn.click();
+          await new Promise(r => setTimeout(r, 800));
+        }
+
+        // After clicking Reply there are 2 editors; use the last one (reply editor).
+        // For main comments, only 1 editor exists.
+        const editors = [...document.querySelectorAll('div.ql-editor[contenteditable="true"]')];
+        const editor = editors[editors.length - 1];
         if (!editor) throw new Error('Comment editor not found. Is this a post page?');
 
         // Focus and type
@@ -50,15 +69,11 @@ pipeline:
           throw new Error('Text did not land in editor.');
         }
 
-        // Find Post button: sibling of emoji/photo buttons inside the comment form
+        // Find Post button: sibling of emoji/photo buttons in the same form as the active editor
         const submitBtn = (() => {
-          const emojiBtn = document.querySelector('button[title="Open Emoji Keyboard"]');
-          if (!emojiBtn) return null;
-          // Walk up to form container, then find last button (Post)
-          const form = emojiBtn.closest('form') || emojiBtn.closest('[class*="comment-box"]') || emojiBtn.parentElement?.parentElement?.parentElement;
+          const form = editor.closest('form') || editor.closest('[class*="comment-box"]') || editor.parentElement?.parentElement?.parentElement?.parentElement;
           if (!form) return null;
           const btns = [...form.querySelectorAll('button')];
-          // Post button is after emoji + photo buttons and has no aria-label
           return btns.find(b => !b.getAttribute('aria-label') && !b.getAttribute('title') && b.id?.startsWith('ember'));
         })();
 
@@ -71,7 +86,7 @@ pipeline:
           throw new Error('Submit may have failed — editor still has text.');
         }
 
-        return [{ status: 'COMMENTED', post_url: postUrl, comment_preview: commentText.slice(0, 200) }];
+        return [{ status: replyTo ? 'REPLIED' : 'COMMENTED', post_url: postUrl, comment_preview: commentText.slice(0, 200) }];
       })()
   - map:
       status: ${{ item.status }}
