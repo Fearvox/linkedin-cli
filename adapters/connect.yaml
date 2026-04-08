@@ -1,0 +1,84 @@
+site: linkedin
+name: connect
+description: Send a LinkedIn connection request to a profile
+domain: www.linkedin.com
+strategy: cookie
+browser: true
+
+args:
+  url:
+    positional: true
+    type: string
+    required: true
+    description: "LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)"
+  dry-run:
+    type: bool
+    default: false
+    description: "Preview without sending"
+
+columns: [status, profile_url, name]
+
+pipeline:
+  - navigate: ${{ args.url }}
+  - wait: 4
+  - evaluate: |
+      (async () => {
+        const profileUrl = ${{ args.url | json }};
+        const dryRun = ${{ args['dry-run'] | json }};
+
+        const vanityMatch = profileUrl.match(/\/in\/([^/?#]+)/);
+        const vanity = vanityMatch ? vanityMatch[1] : profileUrl;
+
+        // Get profile name
+        const nameEl = document.querySelector('h1');
+        const name = nameEl?.innerText?.trim() || vanity;
+
+        // Check current connection state
+        const btns = [...document.querySelectorAll('button')];
+
+        // Already connected / pending
+        const pendingBtn = btns.find(b => b.innerText?.trim() === 'Pending');
+        if (pendingBtn) {
+          return [{ status: 'ALREADY_PENDING', profile_url: profileUrl, name }];
+        }
+        const messageBtn = btns.find(b => b.innerText?.trim() === 'Message');
+        if (messageBtn) {
+          return [{ status: 'ALREADY_CONNECTED', profile_url: profileUrl, name }];
+        }
+
+        // Try primary Connect button first
+        let connectBtn = btns.find(b => b.innerText?.trim() === 'Connect');
+
+        if (!connectBtn) {
+          // LinkedIn hides Connect in the overflow "More" menu (aria-label="More").
+          // The profile-specific More button is the SECOND one on the page.
+          const moreBtns = [...document.querySelectorAll('button[aria-label="More"]')];
+          const profileMoreBtn = moreBtns[1] || moreBtns[0];
+          if (!profileMoreBtn) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name }];
+
+          profileMoreBtn.click();
+          await new Promise(r => setTimeout(r, 800));
+
+          // Find "Connect" in dropdown text
+          const allItems = [...document.querySelectorAll('li, [role="menuitem"], .artdeco-dropdown__item, .pvs-overflow-actions-menu__item')];
+          const connectItem = allItems.find(el => el.innerText?.trim() === 'Connect');
+          if (!connectItem) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name }];
+
+          if (dryRun) { document.body.click(); return [{ status: 'DRY_RUN', profile_url: profileUrl, name }]; }
+          connectItem.click();
+        } else {
+          if (dryRun) return [{ status: 'DRY_RUN', profile_url: profileUrl, name }];
+          connectBtn.click();
+        }
+
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Verify: button should now say Pending or Message
+        const btnsAfter = [...document.querySelectorAll('button')];
+        const sent = btnsAfter.find(b => b.innerText?.trim() === 'Pending' || b.innerText?.trim() === 'Message' || b.innerText?.trim() === 'Follow');
+        return [{ status: sent ? 'SENT' : 'UNKNOWN', profile_url: profileUrl, name }];
+      })()
+  - map:
+      status: ${{ item.status }}
+      profile_url: ${{ item.profile_url }}
+      name: ${{ item.name }}

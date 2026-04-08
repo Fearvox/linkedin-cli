@@ -862,6 +862,103 @@ print(count)
 }
 
 # ---------------------------------------------------------------------------
+# Connect subcommand — send connection requests to approved/new leads
+# ---------------------------------------------------------------------------
+
+cmd_connect() {
+  local dry_run=false
+  local batch=10
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run) dry_run=true; shift ;;
+      --batch)   batch="$2"; shift 2 ;;
+      *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  # Get leads that haven't been connected yet (status: new, scored, approved)
+  local targets
+  targets=$(python3 - "$LEADS_FILE" "$batch" <<'PYEOF'
+import sys, json
+leads_file, batch = sys.argv[1], int(sys.argv[2])
+try:
+    with open(leads_file) as f:
+        leads = [json.loads(l) for l in f if l.strip()]
+except:
+    leads = []
+eligible = [l for l in leads if l.get("status") in ("new","scored","approved") and not l.get("connect_sent")]
+for l in eligible[:batch]:
+    print(json.dumps({"vanity": l.get("vanity",""), "profile_url": l.get("profile_url",""), "name": l.get("name","")}))
+PYEOF
+)
+
+  if [[ -z "$targets" ]]; then
+    echo "No eligible leads to connect with."
+    return
+  fi
+
+  local sent=0 skipped=0
+
+  while IFS= read -r target_json; do
+    local vanity profile_url name
+    vanity=$(echo "$target_json" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('vanity',''))")
+    profile_url=$(echo "$target_json" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('profile_url',''))")
+    name=$(echo "$target_json" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('name',''))")
+
+    echo "Connecting: $name ($profile_url)"
+
+    local result
+    if $dry_run; then
+      result=$(opencli linkedin connect "$profile_url" --dry-run --format json 2>&1) || true
+      echo "  [DRY-RUN] would send connect to $name"
+      continue
+    fi
+
+    result=$(opencli linkedin connect "$profile_url" --format json 2>&1) || true
+    local status
+    status=$(echo "$result" | python3 -c "import sys,json; data=json.loads(sys.stdin.read()); print(data[0].get('status','') if isinstance(data,list) else data.get('status',''))" 2>/dev/null || echo "ERROR")
+
+    echo "  → $status"
+
+    # Update lead status in JSONL
+    python3 - "$vanity" "$status" "$LEADS_FILE" <<'PYEOF'
+import sys, json, tempfile, os
+vanity, status, leads_file = sys.argv[1], sys.argv[2], sys.argv[3]
+updated = []
+try:
+    with open(leads_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            lead = json.loads(line)
+            if lead.get("vanity") == vanity:
+                lead["connect_sent"] = True
+                lead["connect_status"] = status
+                if status == "SENT":
+                    lead["status"] = "connect_sent"
+            updated.append(lead)
+    with open(leads_file, "w") as f:
+        for lead in updated:
+            f.write(json.dumps(lead) + "\n")
+except Exception as e:
+    print(f"  Warning: could not update lead {vanity}: {e}", file=sys.stderr)
+PYEOF
+
+    if [[ "$status" == "SENT" ]]; then
+      ((sent++)) || true
+    else
+      ((skipped++)) || true
+    fi
+
+    sleep 5  # rate limit: 5s between requests
+  done <<< "$targets"
+
+  echo "Done: sent $sent connections, skipped $skipped"
+}
+
+# ---------------------------------------------------------------------------
 # Main dispatcher
 # ---------------------------------------------------------------------------
 
@@ -870,6 +967,7 @@ case "${1:-}" in
   scan)     shift; cmd_scan "$@" ;;
   review)   shift; cmd_review "$@" ;;
   outreach) shift; cmd_outreach "$@" ;;
+  connect)  shift; cmd_connect "$@" ;;
   --help|-h|"") usage ;;
   *) echo "Unknown command: $1" >&2; usage; exit 1 ;;
 esac
