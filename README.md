@@ -1,5 +1,7 @@
 <div align="center">
 
+**English** | [中文](README-zh.md)
+
 # linkedin-cli
 
 **Full LinkedIn automation from your terminal — search, score, connect, message.**

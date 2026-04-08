@@ -1,5 +1,7 @@
 <div align="center">
 
+[English](README.md) | **中文**
+
 # linkedin-cli
 
 **LinkedIn 全自动外联流水线——搜索、评分、触达，端到端。**
