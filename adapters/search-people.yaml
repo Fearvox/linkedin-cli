@@ -19,11 +19,15 @@ args:
     type: number
     default: 20
     description: "Max results to return"
+  network:
+    type: string
+    default: ""
+    description: "Connection degree filter: F=1st, S=2nd, O=3rd+ (empty=all)"
 
 columns: [rank, name, vanity, headline, location, profile_url]
 
 pipeline:
-  - navigate: "https://www.linkedin.com/search/results/people/?keywords=${{ args.query | replace(' ', '+') }}&origin=GLOBAL_SEARCH_HEADER"
+  - navigate: "https://www.linkedin.com/search/results/people/?keywords=${{ args.query | replace(' ', '+') }}&origin=GLOBAL_SEARCH_HEADER${{ args.network ? '&network=%5B%22' + args.network + '%22%5D' : '' }}"
   - wait: 3
   - evaluate: |
       (async () => {

@@ -1,0 +1,7 @@
+Hi {{first_name}},
+
+I'm also from a hospitality background — just built a cashback reconciliation tool for hotel ops teams after seeing the Excel chaos firsthand.
+
+Would love to connect with someone in the same world.
+
+Nolan

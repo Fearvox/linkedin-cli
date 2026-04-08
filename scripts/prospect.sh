@@ -57,11 +57,13 @@ cmd_search() {
   local query=""
   local location=""
   local limit=20
+  local network=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --location) location="$2"; shift 2 ;;
       --limit)    limit="$2";    shift 2 ;;
+      --network)  network="$2";  shift 2 ;;
       --help|-h)  usage; return 0 ;;
       -*)         echo "Unknown option: $1" >&2; usage; exit 1 ;;
       *)
@@ -86,6 +88,9 @@ cmd_search() {
   local cmd=(opencli linkedin search-people "$query" --limit "$limit" --format json)
   if [[ -n "$location" ]]; then
     cmd+=(--location "$location")
+  fi
+  if [[ -n "$network" ]]; then
+    cmd+=(--network "$network")
   fi
 
   # Run search and capture JSON output
@@ -345,11 +350,42 @@ pc_numeric = re.sub(r'[^0-9]', '', p_post_count)
 if pc_numeric and int(pc_numeric) > 0:
     activity_bonus = 1
 
-total_score = industry_score + seniority_score + travel_score + conn_bonus + activity_bonus
+# 6. Network proximity: +5 if 2nd degree via Tier-1 connection, +2 if any 2nd degree
+TIER1_CONNECTIONS = ["collin crick", "yafeng deng", "tina weeks weaver"]
+p_shared = str(profile_data.get("shared_connections", "")).lower()
+proximity_score = 0
+if any(name in p_shared for name in TIER1_CONNECTIONS):
+    proximity_score = 5
+elif "2nd" in str(profile_data.get("connections", "")).lower():
+    proximity_score = 2
+
+# 7. Story resonance: signals that this person is a "same world" peer
+RESONANCE_MAP = {
+    "hospitality management": 3,
+    "usc": 2,
+    "uofsc": 2,
+    "excel": 1,
+    "manual reconciliation": 2,
+}
+resonance_raw = sum(v for k, v in RESONANCE_MAP.items() if k in all_text)
+resonance_score = min(resonance_raw, 3)
+
+total_score = industry_score + seniority_score + travel_score + conn_bonus + activity_bonus + proximity_score + resonance_score
+
+# 8. Tier classification
+if resonance_score >= 3:
+    tier = "A"
+elif industry_score >= 4 and proximity_score >= 2:
+    tier = "B"
+else:
+    tier = "C"
 
 # Update the lead
 original_lead["industry_score"] = industry_score
 original_lead["travel_score"] = travel_score
+original_lead["proximity_score"] = proximity_score
+original_lead["resonance_score"] = resonance_score
+original_lead["tier"] = tier
 original_lead["total_score"] = total_score
 original_lead["company"] = p_company if p_company else original_lead.get("company", "")
 original_lead["status"] = "scanned"
@@ -862,6 +898,64 @@ print(count)
 }
 
 # ---------------------------------------------------------------------------
+# Template subcommand — render a connect note for a given tier
+# ---------------------------------------------------------------------------
+
+cmd_template() {
+  local tier="${1:-}"
+  local name="${2:-}"
+  local mutual="${3:-}"
+  local topic="${4:-}"
+
+  if [[ -z "$tier" || -z "$name" ]]; then
+    echo "Usage: prospect.sh template <tier> <first_name> [mutual_connection] [topic]" >&2
+    echo "  tier: a | b | c" >&2
+    exit 1
+  fi
+
+  local tpl_file
+  tpl_file=$(ls "$PROJECT_DIR/templates/connect/tier-${tier}-"*.txt 2>/dev/null | head -1)
+  if [[ -z "$tpl_file" ]]; then
+    echo "Error: no template found for tier '$tier' in templates/connect/" >&2
+    exit 1
+  fi
+
+  sed -e "s/{{first_name}}/$name/g" \
+      -e "s/{{mutual_connection}}/$mutual/g" \
+      -e "s/{{topic}}/$topic/g" \
+      "$tpl_file"
+}
+
+# ---------------------------------------------------------------------------
+# Batch subcommand — run preset keyword groups by tier
+# ---------------------------------------------------------------------------
+
+cmd_batch() {
+  local tier="${1:-all}"
+  local network="${2:-S}"  # default: 2nd degree
+
+  echo "Running batch search (tier=$tier, network=$network)..."
+
+  # Tier A — 同类人: crossover founders + HRSM alumni + no-code hospitality
+  if [[ "$tier" == "all" || "$tier" == "a" ]]; then
+    echo "--- Tier A ---"
+    cmd_search "hospitality management AI" --network "$network" --limit 10
+    cmd_search "hotel technology founder" --network "$network" --limit 10
+    cmd_search "no code hospitality" --network "$network" --limit 10
+  fi
+
+  # Tier B — 产品用户: revenue managers + OTA ops
+  if [[ "$tier" == "all" || "$tier" == "b" ]]; then
+    echo "--- Tier B ---"
+    cmd_search "hotel revenue manager" --network "$network" --limit 10
+    cmd_search "OTA operations manager" --network "$network" --limit 10
+    cmd_search "revenue manager USC" --network "$network" --limit 5
+  fi
+
+  echo "Batch complete. Run './scripts/prospect.sh scan' to score new leads."
+}
+
+# ---------------------------------------------------------------------------
 # Connect subcommand — send connection requests to approved/new leads
 # ---------------------------------------------------------------------------
 
@@ -968,6 +1062,8 @@ case "${1:-}" in
   review)   shift; cmd_review "$@" ;;
   outreach) shift; cmd_outreach "$@" ;;
   connect)  shift; cmd_connect "$@" ;;
+  template) shift; cmd_template "$@" ;;
+  batch)    shift; cmd_batch "$@" ;;
   --help|-h|"") usage ;;
   *) echo "Unknown command: $1" >&2; usage; exit 1 ;;
 esac

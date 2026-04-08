@@ -1,0 +1,5 @@
+Hi {{first_name}},
+
+I see we're both connected with {{mutual_connection}} — I'm building cashback ops tooling for hotel teams. Would love to connect.
+
+Nolan

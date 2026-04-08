@@ -1,0 +1,7 @@
+Hi {{first_name}},
+
+Enjoyed your recent post on {{topic}}. I'm building AI tooling for hotel cashback ops — came from a hospitality management background myself.
+
+Would love to connect.
+
+Nolan
