@@ -183,13 +183,23 @@ PYEOF
 # ---------------------------------------------------------------------------
 
 cmd_scan() {
+  local retry_failed=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --retry-failed) retry_failed=true; shift ;;
+      *) shift ;;
+    esac
+  done
+
   # -------------------------------------------------------------------------
   # Step 1: Extract new leads (vanity + profile_url) via python3
   # -------------------------------------------------------------------------
   local new_leads
-  new_leads=$(python3 - "$LEADS_FILE" <<'PYEOF'
+  new_leads=$(python3 - "$LEADS_FILE" "$retry_failed" <<'PYEOF'
 import json, sys
 leads_file = sys.argv[1]
+retry_failed = sys.argv[2] == "true"
+eligible_statuses = {"new", "scan_failed"} if retry_failed else {"new"}
 try:
     with open(leads_file, "r") as f:
         for line in f:
@@ -198,7 +208,7 @@ try:
                 continue
             try:
                 lead = json.loads(line)
-                if lead.get("status") == "new":
+                if lead.get("status") in eligible_statuses:
                     # Output tab-separated vanity and profile_url
                     print(f"{lead.get('vanity', '')}\t{lead.get('profile_url', '')}")
             except json.JSONDecodeError:
@@ -235,7 +245,23 @@ PYEOF
 
     local profile_json=""
     profile_json=$(opencli linkedin profile "$profile_url" --format json 2>&1) || {
-      echo "  Warning: profile fetch failed for $vanity, skipping" >&2
+      echo "  Warning: profile fetch failed for $vanity, marking as scan_failed" >&2
+      python3 - "$vanity" "$LEADS_FILE" <<'MARKEOF'
+import json, sys
+vanity, leads_file = sys.argv[1], sys.argv[2]
+try:
+    with open(leads_file) as f:
+        lines = f.readlines()
+    with open(leads_file, "w") as out:
+        for l in lines:
+            if l.strip():
+                d = json.loads(l)
+                if d.get("vanity") == vanity:
+                    d["status"] = "scan_failed"
+                out.write(json.dumps(d) + "\n")
+except Exception as e:
+    print(f"  Warning: could not mark scan_failed for {vanity}: {e}", file=sys.stderr)
+MARKEOF
       continue
     }
 
@@ -956,20 +982,124 @@ cmd_batch() {
 }
 
 # ---------------------------------------------------------------------------
+# Monitor subcommand — check which connect_sent leads have accepted
+# ---------------------------------------------------------------------------
+
+cmd_monitor() {
+  local auto_outreach=false
+  local template_path=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --auto-outreach)  auto_outreach=true; shift ;;
+      --template)       template_path="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  echo "Fetching current connections..."
+
+  local connections_json
+  connections_json=$(opencli linkedin connections --limit 200 --format json 2>&1) || {
+    echo "Error: could not fetch connections" >&2
+    exit 1
+  }
+
+  python3 - "$LEADS_FILE" "$connections_json" "$auto_outreach" "$template_path" <<'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+
+leads_file   = sys.argv[1]
+conn_raw     = sys.argv[2]
+auto_outreach = sys.argv[3] == "true"
+template_path = sys.argv[4]
+
+# Parse connections into a vanity set
+try:
+    conn_list = json.loads(conn_raw)
+    if not isinstance(conn_list, list):
+        conn_list = []
+except Exception:
+    conn_list = []
+connections = {c.get("vanity", "").strip("/").split("/")[-1] for c in conn_list if c.get("vanity")}
+
+# Load leads
+try:
+    with open(leads_file) as f:
+        leads = [json.loads(l) for l in f if l.strip()]
+except FileNotFoundError:
+    leads = []
+
+newly_accepted = []
+pending_count  = 0
+already_accepted = 0
+
+for lead in leads:
+    status = lead.get("status", "")
+    vanity = lead.get("vanity", "")
+    if status == "connect_sent":
+        if vanity in connections:
+            lead["status"] = "accepted"
+            lead["accepted_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            newly_accepted.append(lead)
+        else:
+            pending_count += 1
+    elif status == "accepted":
+        already_accepted += 1
+
+# Write back
+with open(leads_file, "w") as f:
+    for lead in leads:
+        f.write(json.dumps(lead) + "\n")
+
+print(f"\nMonitor results:")
+print(f"  Newly accepted:     {len(newly_accepted)}")
+print(f"  Still pending:      {pending_count}")
+print(f"  Previously accepted:{already_accepted}")
+
+if newly_accepted:
+    print(f"\nNew connections (ready for outreach):")
+    for lead in newly_accepted:
+        print(f"  • {lead.get('name','?')} ({lead.get('vanity','?')}) — {lead.get('headline','')[:50]}")
+PYEOF
+
+  # Auto-outreach for newly accepted leads
+  if $auto_outreach && [[ -n "$template_path" ]]; then
+    echo ""
+    echo "Running outreach for newly accepted leads..."
+    cmd_outreach --template "$template_path" --dry-run
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Connect subcommand — send connection requests to approved/new leads
 # ---------------------------------------------------------------------------
 
 cmd_connect() {
   local dry_run=false
   local batch=10
+  local note=""
+  local tier=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --dry-run) dry_run=true; shift ;;
       --batch)   batch="$2"; shift 2 ;;
+      --note)    note="$2";  shift 2 ;;
+      --tier)    tier="$2";  shift 2 ;;
       *) echo "Unknown option: $1" >&2; exit 1 ;;
     esac
   done
+
+  # If --tier given but no --note, auto-load template as note
+  if [[ -n "$tier" && -z "$note" ]]; then
+    local tpl_file
+    tpl_file=$(ls "$PROJECT_DIR/templates/connect/tier-${tier}-"*.txt 2>/dev/null | head -1)
+    if [[ -n "$tpl_file" ]]; then
+      # Use first name placeholder for now — will be replaced per-lead below
+      note=$(cat "$tpl_file")
+    fi
+  fi
 
   # Get leads that haven't been connected yet (status: new, scored, approved)
   local targets
@@ -1002,14 +1132,26 @@ PYEOF
 
     echo "Connecting: $name ($profile_url)"
 
+    # Interpolate {{first_name}} in note
+    local first_name
+    first_name=$(echo "$name" | awk '{print $1}')
+    local resolved_note="${note//\{\{first_name\}\}/$first_name}"
+
     local result
     if $dry_run; then
-      result=$(opencli linkedin connect "$profile_url" --dry-run --format json 2>&1) || true
-      echo "  [DRY-RUN] would send connect to $name"
+      if [[ -n "$resolved_note" ]]; then
+        echo "  [DRY-RUN] would send connect to $name with note: ${resolved_note:0:60}..."
+      else
+        echo "  [DRY-RUN] would send connect to $name"
+      fi
       continue
     fi
 
-    result=$(opencli linkedin connect "$profile_url" --format json 2>&1) || true
+    local connect_cmd=(opencli linkedin connect "$profile_url" --format json)
+    if [[ -n "$resolved_note" ]]; then
+      connect_cmd+=(--note "$resolved_note")
+    fi
+    result=$("${connect_cmd[@]}" 2>&1) || true
     local status
     status=$(echo "$result" | python3 -c "import sys,json; data=json.loads(sys.stdin.read()); print(data[0].get('status','') if isinstance(data,list) else data.get('status',''))" 2>/dev/null || echo "ERROR")
 
@@ -1062,6 +1204,7 @@ case "${1:-}" in
   review)   shift; cmd_review "$@" ;;
   outreach) shift; cmd_outreach "$@" ;;
   connect)  shift; cmd_connect "$@" ;;
+  monitor)  shift; cmd_monitor "$@" ;;
   template) shift; cmd_template "$@" ;;
   batch)    shift; cmd_batch "$@" ;;
   --help|-h|"") usage ;;

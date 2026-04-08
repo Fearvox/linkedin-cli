@@ -11,12 +11,16 @@ args:
     type: string
     required: true
     description: "LinkedIn profile URL (e.g. https://www.linkedin.com/in/username)"
+  note:
+    type: string
+    default: ""
+    description: "Personalized note (max 300 chars). Forces More→Connect path to show modal."
   dry-run:
     type: bool
     default: false
     description: "Preview without sending"
 
-columns: [status, profile_url, name]
+columns: [status, profile_url, name, note_preview]
 
 pipeline:
   - navigate: ${{ args.url }}
@@ -25,6 +29,8 @@ pipeline:
       (async () => {
         const profileUrl = ${{ args.url | json }};
         const dryRun = ${{ args['dry-run'] | json }};
+        const note = ${{ args.note | json }};
+        const forceModal = note.length > 0;
 
         const vanityMatch = profileUrl.match(/\/in\/([^/?#]+)/);
         const vanity = vanityMatch ? vanityMatch[1] : profileUrl;
@@ -39,46 +45,81 @@ pipeline:
         // Already connected / pending
         const pendingBtn = btns.find(b => b.innerText?.trim() === 'Pending');
         if (pendingBtn) {
-          return [{ status: 'ALREADY_PENDING', profile_url: profileUrl, name }];
+          return [{ status: 'ALREADY_PENDING', profile_url: profileUrl, name, note_preview: '' }];
         }
         const messageBtn = btns.find(b => b.innerText?.trim() === 'Message');
         if (messageBtn) {
-          return [{ status: 'ALREADY_CONNECTED', profile_url: profileUrl, name }];
+          return [{ status: 'ALREADY_CONNECTED', profile_url: profileUrl, name, note_preview: '' }];
         }
 
-        // Try primary Connect button first
+        // Try primary Connect button — but if we need a note, force the More→Connect modal path
         let connectBtn = btns.find(b => b.innerText?.trim() === 'Connect');
 
-        if (!connectBtn) {
+        const useModalPath = forceModal || !connectBtn;
+
+        if (useModalPath) {
           // LinkedIn hides Connect in the overflow "More" menu (aria-label="More").
           // The profile-specific More button is the SECOND one on the page.
           const moreBtns = [...document.querySelectorAll('button[aria-label="More"]')];
           const profileMoreBtn = moreBtns[1] || moreBtns[0];
-          if (!profileMoreBtn) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name }];
+          if (!profileMoreBtn) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name, note_preview: '' }];
 
           profileMoreBtn.click();
           await new Promise(r => setTimeout(r, 800));
 
-          // Find "Connect" in dropdown text
+          // Find "Connect" in dropdown
           const allItems = [...document.querySelectorAll('li, [role="menuitem"], .artdeco-dropdown__item, .pvs-overflow-actions-menu__item')];
           const connectItem = allItems.find(el => el.innerText?.trim() === 'Connect');
-          if (!connectItem) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name }];
+          if (!connectItem) return [{ status: 'NO_CONNECT_BUTTON', profile_url: profileUrl, name, note_preview: '' }];
 
-          if (dryRun) { document.body.click(); return [{ status: 'DRY_RUN', profile_url: profileUrl, name }]; }
+          if (dryRun) {
+            document.body.click();
+            return [{ status: 'DRY_RUN', profile_url: profileUrl, name, note_preview: note.slice(0, 60) }];
+          }
+
           connectItem.click();
+          await new Promise(r => setTimeout(r, 1000));
+
+          // Check for modal with "Add a note" option
+          if (note) {
+            const modal = document.querySelector('[role="dialog"]');
+            if (modal) {
+              const addNoteBtn = [...modal.querySelectorAll('button')]
+                .find(b => b.innerText?.toLowerCase().includes('add a note'));
+              if (addNoteBtn) {
+                addNoteBtn.click();
+                await new Promise(r => setTimeout(r, 500));
+                const noteInput = modal.querySelector('textarea');
+                if (noteInput) {
+                  noteInput.focus();
+                  document.execCommand('insertText', false, note.slice(0, 300));
+                  await new Promise(r => setTimeout(r, 300));
+                }
+              }
+              // Click Send
+              const sendBtn = [...modal.querySelectorAll('button')]
+                .find(b => b.innerText?.trim() === 'Send');
+              if (sendBtn) {
+                sendBtn.click();
+                await new Promise(r => setTimeout(r, 1500));
+                return [{ status: 'SENT_WITH_NOTE', profile_url: profileUrl, name, note_preview: note.slice(0, 60) }];
+              }
+            }
+          }
         } else {
-          if (dryRun) return [{ status: 'DRY_RUN', profile_url: profileUrl, name }];
+          if (dryRun) return [{ status: 'DRY_RUN', profile_url: profileUrl, name, note_preview: '' }];
           connectBtn.click();
         }
 
         await new Promise(r => setTimeout(r, 1500));
 
-        // Verify: button should now say Pending or Message
+        // Verify: button changed away from Connect
         const btnsAfter = [...document.querySelectorAll('button')];
         const sent = btnsAfter.find(b => b.innerText?.trim() === 'Pending' || b.innerText?.trim() === 'Message' || b.innerText?.trim() === 'Follow');
-        return [{ status: sent ? 'SENT' : 'UNKNOWN', profile_url: profileUrl, name }];
+        return [{ status: sent ? 'SENT' : 'UNKNOWN', profile_url: profileUrl, name, note_preview: '' }];
       })()
   - map:
       status: ${{ item.status }}
       profile_url: ${{ item.profile_url }}
       name: ${{ item.name }}
+      note_preview: ${{ item.note_preview }}
