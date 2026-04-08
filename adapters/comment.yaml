@@ -31,48 +31,44 @@ pipeline:
         const commentText = ${{ args.text | json }};
         const dryRun = ${{ args['dry-run'] | json }};
 
-        let activityUrn = '';
-        const urnMatch = postUrl.match(/urn:li:activity:(\d+)/);
-        if (urnMatch) {
-          activityUrn = 'urn:li:activity:' + urnMatch[1];
-        } else {
-          const allEls = document.querySelectorAll('*');
-          for (const el of allEls) {
-            for (const attr of el.attributes) {
-              const m = attr.value.match(/urn:li:activity:(\d+)/);
-              if (m) { activityUrn = 'urn:li:activity:' + m[1]; break; }
-            }
-            if (activityUrn) break;
-          }
-        }
-        if (!activityUrn) throw new Error('Could not find activity URN.');
-
         if (dryRun) {
           return [{ status: 'DRY_RUN', post_url: postUrl, comment_preview: commentText.slice(0, 200) }];
         }
 
-        const jsession = document.cookie.split(';').map(p => p.trim())
-          .find(p => p.startsWith('JSESSIONID='))?.slice('JSESSIONID='.length);
-        if (!jsession) throw new Error('LinkedIn JSESSIONID not found.');
-        const csrf = jsession.replace(/^"|"$/g, '');
+        // --- DOM interaction (Voyager comment API returns 400 post-2025 redesign) ---
+        const editor = document.querySelector('div.ql-editor[contenteditable="true"]');
+        if (!editor) throw new Error('Comment editor not found. Is this a post page?');
 
-        const res = await fetch('/voyager/api/voyagerSocialDashComments', {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'csrf-token': csrf,
-            'x-restli-protocol-version': '2.0.0',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            threadUrn: activityUrn,
-            comment: { values: [{ value: commentText }] },
-          }),
-        });
+        // Focus and type
+        editor.click();
+        editor.focus();
+        await new Promise(r => setTimeout(r, 400));
+        document.execCommand('insertText', false, commentText);
+        await new Promise(r => setTimeout(r, 400));
 
-        if (!res.ok) {
-          const err = await res.text();
-          throw new Error('Comment failed: HTTP ' + res.status + ' — ' + err.slice(0, 200));
+        if (editor.innerText.trim().length === 0) {
+          throw new Error('Text did not land in editor.');
+        }
+
+        // Find Post button: sibling of emoji/photo buttons inside the comment form
+        const submitBtn = (() => {
+          const emojiBtn = document.querySelector('button[title="Open Emoji Keyboard"]');
+          if (!emojiBtn) return null;
+          // Walk up to form container, then find last button (Post)
+          const form = emojiBtn.closest('form') || emojiBtn.closest('[class*="comment-box"]') || emojiBtn.parentElement?.parentElement?.parentElement;
+          if (!form) return null;
+          const btns = [...form.querySelectorAll('button')];
+          // Post button is after emoji + photo buttons and has no aria-label
+          return btns.find(b => !b.getAttribute('aria-label') && !b.getAttribute('title') && b.id?.startsWith('ember'));
+        })();
+
+        if (!submitBtn) throw new Error('Post button not found.');
+        submitBtn.click();
+        await new Promise(r => setTimeout(r, 1500));
+
+        // Verify: editor should be empty after successful submit
+        if (editor.innerText.trim().length > 0) {
+          throw new Error('Submit may have failed — editor still has text.');
         }
 
         return [{ status: 'COMMENTED', post_url: postUrl, comment_preview: commentText.slice(0, 200) }];
