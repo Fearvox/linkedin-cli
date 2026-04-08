@@ -23,8 +23,8 @@ args:
 columns: [rank, name, vanity, headline, location, profile_url]
 
 pipeline:
-  - navigate: "https://www.linkedin.com/feed/"
-  - wait: 2
+  - navigate: "https://www.linkedin.com/search/results/people/?keywords=${{ args.query | replace(' ', '+') }}&origin=GLOBAL_SEARCH_HEADER"
+  - wait: 3
   - evaluate: |
       (async () => {
         const query = ${{ args.query | json }};
@@ -116,56 +116,41 @@ pipeline:
           // Voyager API failed; fall through to DOM fallback
         }
 
-        // --- DOM scrape fallback ---
+        // --- DOM scrape fallback (already on search results page) ---
         if (results.length === 0) {
-          const searchUrl = 'https://www.linkedin.com/search/results/people/?keywords='
-            + encodeURIComponent(query)
-            + (locationFilter ? '&geoUrn=' + encodeURIComponent(locationFilter) : '')
-            + '&origin=GLOBAL_SEARCH_HEADER';
-          window.location.href = searchUrl;
+          // Already navigated to search page via pipeline; just wait for render
+          await new Promise(r => setTimeout(r, 2000));
 
-          // Wait for search results to render
-          await new Promise(r => setTimeout(r, 4000));
+          // LinkedIn uses CSS Modules hashed class names — use data-display-contents
+          // as stable card boundary, parse text lines for name/headline/location
+          const seen2 = new Set();
+          const links = [...document.querySelectorAll('a[href*="/in/"]')];
+          for (const a of links) {
+            const vanityMatch = a.href.match(/\/in\/([^/?#]+)/);
+            if (!vanityMatch) continue;
+            const vanity = vanityMatch[1];
+            if (seen2.has(vanity)) continue;
+            seen2.add(vanity);
 
-          const containers = document.querySelectorAll(
-            '.reusable-search__result-container, .entity-result, li.reusable-search__result-container'
-          );
+            const card = a.closest('[data-display-contents]');
+            if (!card) continue;
 
-          for (const card of containers) {
-            const nameEl = card.querySelector(
-              '.entity-result__title-text a span[aria-hidden="true"], '
-              + '.entity-result__title-text a span:first-child, '
-              + 'span.entity-result__title-text'
-            );
-            const linkEl = card.querySelector(
-              '.entity-result__title-text a, a.app-aware-link'
-            );
-            const subtitleEl = card.querySelector(
-              '.entity-result__primary-subtitle, '
-              + '.entity-result__summary'
-            );
-            const locEl = card.querySelector(
-              '.entity-result__secondary-subtitle'
-            );
+            const lines = card.innerText
+              .split('\n')
+              .map(l => l.trim())
+              .filter(l => l && !l.match(/^(Connect|Message|Follow|\d+|•)/));
 
-            const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
-            const name = normalize(nameEl?.textContent);
-            const href = linkEl?.href || '';
-            const vanityMatch = href.match(/\/in\/([^/?]+)/);
-            const vanity = vanityMatch ? vanityMatch[1] : '';
-            const headline = normalize(subtitleEl?.textContent);
-            const location = normalize(locEl?.textContent);
+            const name = (lines[0] || '').replace(/\s*•\s*\d+(st|nd|rd|th)\+?/, '').trim();
+            const headline = lines.find((l, i) => i > 0 && !l.includes('•') && l.length > 2) || '';
+            const location = lines.find((l, i) => i > 1 && l !== headline && !l.includes('•') && l.length > 2) || '';
 
             if (!name) continue;
-
             results.push({
               name,
               vanity,
               headline,
               location,
-              profile_url: vanity
-                ? 'https://www.linkedin.com/in/' + vanity
-                : href,
+              profile_url: 'https://www.linkedin.com/in/' + vanity,
             });
           }
         }
