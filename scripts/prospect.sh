@@ -151,6 +151,13 @@ with open(leads_file, "a") as f:
             skipped += 1
             continue
 
+        # Quality gate: skip profiles with suspiciously short headlines
+        # (< 20 chars = "Revenue Manager" level — profile incomplete, low signal)
+        headline = result.get("headline", "")
+        if len(headline) < 20:
+            skipped += 1
+            continue
+
         lead = {
             "id": uuid.uuid4().hex[:8],
             "vanity": vanity,
