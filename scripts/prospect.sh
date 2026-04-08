@@ -1000,7 +1000,7 @@ cmd_monitor() {
   echo "Fetching current connections..."
 
   local connections_json
-  connections_json=$(opencli linkedin connections --limit 200 --format json 2>&1) || {
+  connections_json=$(opencli linkedin connections --limit 50 --format json 2>&1) || {
     echo "Error: could not fetch connections" >&2
     exit 1
   }

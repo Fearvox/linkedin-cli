@@ -161,17 +161,9 @@ pipeline:
         }
 
         // --- DOM scrape fallback (already on connections page) ---
+        // LinkedIn uses CSS Modules hashed class names — use a[href*="/in/"] +
+        // closest([data-display-contents]) as stable selectors.
         if (results.length === 0) {
-          // If query specified, use search filter via URL params already in page
-          if (query) {
-            const searchInput = document.querySelector('input[placeholder*="Search"]') || document.querySelector('#mn-connections-search-input');
-            if (searchInput) {
-              searchInput.value = query;
-              searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-              await new Promise(r => setTimeout(r, 2000));
-            }
-          }
-
           // Scroll to load more connections
           const scrollAttempts = Math.ceil(limit / 10);
           for (let i = 0; i < scrollAttempts; i++) {
@@ -179,52 +171,33 @@ pipeline:
             await new Promise(r => setTimeout(r, 1000));
           }
 
-          const cards = document.querySelectorAll(
-            '.mn-connection-card, '
-            + '.scaffold-finite-scroll__content li, '
-            + '[data-view-name="connection-card"], '
-            + '.mn-connections li'
-          );
+          const seenVanities = new Set();
+          const links = [...document.querySelectorAll('a[href*="/in/"]')];
+          for (const a of links) {
+            const vanityMatch = a.href.match(/\/in\/([^/?#]+)/);
+            if (!vanityMatch) continue;
+            const vanity = vanityMatch[1];
+            if (seenVanities.has(vanity)) continue;
+            seenVanities.add(vanity);
 
-          for (const card of cards) {
-            const nameEl = card.querySelector(
-              '.mn-connection-card__name, '
-              + '.entity-result__title-text a span[aria-hidden="true"], '
-              + 'span.mn-connection-card__name'
-            );
-            const linkEl = card.querySelector(
-              '.mn-connection-card__link, '
-              + 'a.app-aware-link, '
-              + 'a[href*="/in/"]'
-            );
-            const subtitleEl = card.querySelector(
-              '.mn-connection-card__occupation, '
-              + '.entity-result__primary-subtitle'
-            );
-            const timeEl = card.querySelector(
-              '.mn-connection-card__connected-time, '
-              + 'time, '
-              + '.time-badge'
-            );
+            const card = a.closest('[data-display-contents]');
+            if (!card) continue;
 
-            const normalize = v => String(v || '').replace(/\s+/g, ' ').trim();
-            const name = normalize(nameEl?.textContent);
-            const href = linkEl?.href || '';
-            const vanityMatch = href.match(/\/in\/([^/?]+)/);
-            const vanity = vanityMatch ? vanityMatch[1] : '';
-            const headline = normalize(subtitleEl?.textContent);
-            const connectedAt = normalize(timeEl?.textContent);
+            const lines = card.innerText
+              .split('\n')
+              .map(l => l.trim())
+              .filter(l => l && !l.match(/^(Connect|Message|Follow|\d+|•)/));
+
+            const name = (lines[0] || '').replace(/\s*•\s*\d+(st|nd|rd|th)\+?/, '').trim();
+            const headline = lines.find((l, i) => i > 0 && !l.includes('•') && l.length > 2) || '';
 
             if (!name) continue;
-
             results.push({
               name,
               vanity,
               headline,
-              connected_at: connectedAt,
-              profile_url: vanity
-                ? 'https://www.linkedin.com/in/' + vanity
-                : href,
+              connected_at: '',
+              profile_url: 'https://www.linkedin.com/in/' + vanity,
             });
           }
         }
