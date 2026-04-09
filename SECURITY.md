@@ -44,7 +44,7 @@ All data stays on your machine. Nothing phones home.
 
 If you discover a security vulnerability:
 
-- **Email:** [nolan@0xvox.com](mailto:nolan@0xvox.com)
+- **Email:** [security@zonicdesign.art](mailto:security@zonicdesign.art)
 - **Do not** open public GitHub issues for security vulnerabilities.
 - Allow reasonable time for a response before any public disclosure.
 
