@@ -137,9 +137,9 @@ Tier 分类用 (Authority, Relevance) 二维空间，不是加法总分：
 
 `.algo-profile/` 目录持久化每个非平凡的算法决策。
 
-评分引擎经历了两次大迭代。最初是 7 维加法模型（各维度分数相加，>=10 推荐）。实际跑了一批数据后发现问题：8 个弱信号堆到和 1 个强信号一样的分数。当前门控级联就是修复方案。Quality Gate 从最初的 `len(headline) < 20` 单一检查，演化到 6 信号复合分类器 — 因为第一批评分结果暴露了 ALL CAPS 求职者和不完整 profile 大量通过。
+评分引擎经历过两次大改。第一版是 7 维加法模型 — 跑了一批真实数据后发现问题：8 个弱信号堆出的总分和 1 个强信号一样。改成门控级联之后，ALL CAPS 求职者和不完整 profile 在第一级就被过滤掉了。
 
-品牌分级字典、关键词列表、门控阈值 — 都可调。把回复率喂回来，调整权重，重新跑分。
+品牌分级、关键词、阈值 — 都可调。把回复率喂回来，改权重，重新跑分。
 
 ---
 
@@ -151,7 +151,7 @@ Tier 分类用 (Authority, Relevance) 二维空间，不是加法总分：
 - 模板经人工审核，专业语气，3-7 行
 - 人工审核是强制门控 — 没有你点头，什么都不会发出去
 
-用于有真实意图的精准触达。大量群发会触发 LinkedIn 风控，也完全违背评分引擎的设计初衷。
+用于有真实意图的精准触达。大量群发会被 LinkedIn 风控拦掉。
 
 ---
 
@@ -187,6 +187,27 @@ linkedin-cli/
 ├── LICENSE
 └── README.md
 ```
+
+---
+
+## Job Hunt 模式
+
+与 grunk job-hunt pipeline 打通：职位研究 → 内推找人 → 精准触达。详见 [docs/job-hunt-2026-04-08.md](docs/job-hunt-2026-04-08.md)。
+
+快速上手：
+```bash
+# 职位市场研究（公开数据，无需 LinkedIn 登录）
+opencli linkedin search "Go backend engineer remote" --limit 20
+
+# 找目标公司员工
+opencli linkedin search-people "software engineer at DoorDash Toronto" --limit 10
+
+# 评分 + 触达
+./scripts/prospect.sh search "software engineer at DoorDash" --limit 20
+./scripts/prospect.sh scan
+```
+
+在 Claude Code 中激活：`/linkedin-job-hunt`
 
 ---
 
