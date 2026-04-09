@@ -190,6 +190,27 @@ linkedin-cli/
 
 ---
 
+## Job Hunt Mode
+
+The prospect pipeline integrates with grunk's job-hunt pipeline for end-to-end job search + referral outreach. See [docs/job-hunt-2026-04-08.md](docs/job-hunt-2026-04-08.md) for the full research report and workflow.
+
+Quick start:
+```bash
+# Research jobs (public, no login)
+opencli linkedin search "Go backend engineer remote" --limit 20
+
+# Find employees at target company for referrals
+opencli linkedin search-people "software engineer at DoorDash Toronto" --limit 10
+
+# Score and outreach via prospect pipeline
+./scripts/prospect.sh search "software engineer at DoorDash" --limit 20
+./scripts/prospect.sh scan
+```
+
+Activate in Claude Code: `/linkedin-job-hunt`
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Highest-value contributions:
