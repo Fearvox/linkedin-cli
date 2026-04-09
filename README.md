@@ -6,7 +6,7 @@
 
 **Full LinkedIn automation from your terminal — search, score, connect, message.**
 
-![opencli](https://img.shields.io/badge/opencli-v1.6.8+-blue) ![Playwright](https://img.shields.io/badge/Playwright-Browser%20Automation-2ea44f) ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white) ![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?logo=gnubash&logoColor=white) ![Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-7C3AED) ![License](https://img.shields.io/badge/License-MIT-brightgreen) [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=flat-square&logo=github-sponsors)](https://github.com/sponsors/Synslius)
+![opencli](https://img.shields.io/badge/opencli-v1.6.8+-blue) ![Playwright](https://img.shields.io/badge/Playwright-Browser%20Automation-2ea44f) ![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white) ![Bash](https://img.shields.io/badge/Bash-5.0+-4EAA25?logo=gnubash&logoColor=white) ![Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-7C3AED) ![License](https://img.shields.io/badge/License-MIT-brightgreen) [![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?style=flat-square&logo=github-sponsors)](https://github.com/sponsors/Fearvox)
 
 </div>
 
